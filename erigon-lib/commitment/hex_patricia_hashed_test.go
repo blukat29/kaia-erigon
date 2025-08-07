@@ -144,6 +144,7 @@ func Test_HexPatriciaHashed_EmptyUpdate(t *testing.T) {
 
 	fmt.Println("2. Empty updates applied without state reset")
 	require.EqualValues(t, hashBeforeEmptyUpdate, hashAfterEmptyUpdate)
+	t.Logf("hashBeforeEmptyUpdate %x\n", hashBeforeEmptyUpdate)
 }
 
 func Test_HexPatriciaHashed_UniqueRepresentation2(t *testing.T) {
@@ -425,6 +426,7 @@ func Test_HexPatriciaHashed_UniqueRepresentation(t *testing.T) {
 		updsTwo.Close()
 	}
 	require.EqualValues(t, rBatch, rSeq, "sequential and batch root should match")
+	fmt.Printf("rSeq %x\n", rSeq)
 }
 
 func Test_HexPatriciaHashed_Sepolia(t *testing.T) {
