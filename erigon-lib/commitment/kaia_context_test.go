@@ -22,7 +22,6 @@ import (
 
 	"github.com/erigontech/erigon-lib/common/hexutil"
 	"github.com/erigontech/erigon-lib/common/length"
-	"github.com/erigontech/erigon-lib/types/accounts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,7 +37,7 @@ import (
 func Test_KaiaPatriciaContext_ResetThenSingularUpdates(t *testing.T) {
 	accountKeyLen := 1 // for simplicity.
 	ctx := context.Background()
-	kc := NewKaiaPatriciaContext(0)
+	kc := NewKaiaPatriciaContext(ModeErigonV3, 0)
 	hph := NewHexPatriciaHashed(accountKeyLen, kc, t.TempDir())
 
 	// First updates.
@@ -97,7 +96,7 @@ func Test_KaiaPatriciaContext_ResetThenSingularUpdates(t *testing.T) {
 func Test_KaiaPatriciaContext_UniqueRepresentation(t *testing.T) {
 	accountKeyLen := length.Addr
 	ctx := context.Background()
-	kc := NewKaiaPatriciaContext(0)
+	kc := NewKaiaPatriciaContext(ModeErigonV3, 0)
 	hph := NewHexPatriciaHashed(accountKeyLen, kc, t.TempDir())
 
 	plainKeys, updates := NewUpdateBuilder().
@@ -139,27 +138,60 @@ func (kc *KaiaPatriciaContext) applyUpdates(accountKeyLen int, plainKeys [][]byt
 		update := updates[i]
 
 		if len(key) == accountKeyLen {
-			if update.Flags&DeleteUpdate != 0 {
-				delete(kc.pendingAccounts, string(key))
-			} else {
-				kc.PutAccount(key, accounts.SerialiseV3(&accounts.Account{
-					Nonce:    update.Nonce,
-					Balance:  update.Balance,
-					CodeHash: update.CodeHash,
-				}))
+			if err := kc.putAccountUpdate(key, &update); err != nil {
+				return err
 			}
+			// if update.Flags&DeleteUpdate != 0 { // Delete account
+			// 	delete(kc.pendingAccounts, string(key))
+			// 	continue
+			// } else if update.Flags&RawBytesUpdate != 0 { // RawBytes update
+			// 	kc.PutAccount(key, update.RawBytes)
+			// 	continue
+			// } else { // UpdateBuilder{Balance, Nonce, CodeHash} update
+			// 	if update.Flags&CodeUpdate == 0 {
+			// 		update.CodeHash = *(*[length.Hash]byte)(EmptyCodeHash)
+			// 	}
+			// 	storageRootHash := *(*[length.Hash]byte)(EmptyRootHash)
+			// 	cell := &cell{Update: update}
+			// 	valBuf := make(rlp.RlpEncodedBytes, 128)
+			// 	valLen := cell.accountForHashing(valBuf[:], storageRootHash)
+			// 	kc.PutAccount(key, valBuf[:valLen])
+			// }
 		} else {
-			if update.Flags&DeleteUpdate != 0 {
-				delete(kc.pendingStorages, string(key))
-			} else {
-				kc.PutStorage(key, update.Storage[:update.StorageLen])
+			if err := kc.putStorageUpdate(key, &update); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-func Test_KaiaPatriciaContext_ApplyUpdatesForTest(t *testing.T) {
+// Analogous to UpdateBuilder(plainKeys, updates) and WrapKeyUpdates(updates)
+func buildRawBytesUpdates(t *testing.T, accounts [][2]string) ([][]byte, []Update, *Updates) {
+	plainKeys := make([][]byte, len(accounts))
+	updates := make([]Update, len(accounts))
+
+	upd := NewUpdates(ModeDirect, t.TempDir(), KeyToHexNibbleHash)
+	for i, account := range accounts {
+		address, accountRLP := hexutil.MustDecode(account[0]), hexutil.MustDecode(account[1])
+
+		plainKeys[i] = address
+		updates[i] = Update{
+			Flags:    RawBytesUpdate,
+			RawBytes: accountRLP,
+		}
+
+		upd.TouchPlainKey(string(address), accountRLP, func(c *KeyUpdate, _ []byte) {
+			c.plainKey = string(address)
+			c.hashedKey = KeyToHexNibbleHash(address)
+			c.update.Flags = RawBytesUpdate
+			c.update.RawBytes = accountRLP
+		})
+	}
+	return plainKeys, updates, upd
+}
+
+func Test_KaiaPatriciaContext_applyUpdates_ModeErigonV3(t *testing.T) {
 	accountKeyLen := 1 // for simplicity
 	plainKeys, updates := NewUpdateBuilder().
 		Balance("00", 4).
@@ -171,7 +203,7 @@ func Test_KaiaPatriciaContext_ApplyUpdatesForTest(t *testing.T) {
 		Storage("03", "56", "050505").
 		Build()
 
-	kc := NewKaiaPatriciaContext(0)
+	kc := NewKaiaPatriciaContext(ModeErigonV3, 0)
 	kc.setTrace(true)
 	err := kc.applyUpdates(accountKeyLen, plainKeys, updates)
 	require.NoError(t, err)
@@ -203,24 +235,30 @@ func Test_KaiaPatriciaContext_ApplyUpdatesForTest(t *testing.T) {
 	assert.Equal(t, "050505", hex.EncodeToString(u.Storage[:u.StorageLen]))
 }
 
-func wrapRawBytesUpdates(t *testing.T, accounts [][2]string) *Updates {
-	upd := NewUpdates(ModeUpdate, t.TempDir(), KeyToHexNibbleHash)
-	for _, account := range accounts {
-		address, accountRLP := hexutil.MustDecode(account[0]), hexutil.MustDecode(account[1])
-		upd.TouchPlainKey(string(address), accountRLP, func(c *KeyUpdate, _ []byte) {
-			c.plainKey = string(address)
-			c.hashedKey = KeyToHexNibbleHash(address)
-			c.update.Flags = RawBytesUpdate
-			c.update.RawBytes = accountRLP
-		})
-	}
-	return upd
-}
+// Test that ModeRawBytes deliver the raw bytes as is.
+func Test_KaiaPatriciaContext_applyUpdates_ModeRawBytes(t *testing.T) {
+	var (
+		address    = "0x71562b71999873db5b286df957af199ec94617f7"
+		accountRLP = "0xf84803843b98a783a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+		accounts   = [][2]string{
+			{address, accountRLP},
+		}
+	)
 
-// Batch inject states for testing.
-func (kc *KaiaPatriciaContext) applyRawBytesUpdates(accounts [][2]string) {
-	for _, account := range accounts {
-		address, accountRLP := hexutil.MustDecode(account[0]), hexutil.MustDecode(account[1])
-		kc.PutAccount([]byte(address), accountRLP)
-	}
+	kc := NewKaiaPatriciaContext(ModeRawBytes, 0)
+	plainKeys, updates, upd := buildRawBytesUpdates(t, accounts)
+	defer upd.Close()
+	assert.Equal(t, [][]byte{hexutil.MustDecode(address)}, plainKeys)
+	assert.Equal(t, []Update{
+		{Flags: RawBytesUpdate, RawBytes: hexutil.MustDecode(accountRLP)},
+	}, updates)
+	assert.Equal(t, ModeDirect, upd.Mode())
+
+	err := kc.applyUpdates(length.Addr, plainKeys, updates)
+	require.NoError(t, err)
+
+	u, err := kc.Account(hexutil.MustDecode(address))
+	require.NoError(t, err)
+	assert.Equal(t, RawBytesUpdate, u.Flags)
+	assert.Equal(t, accounts[0][1], "0x"+hex.EncodeToString(u.RawBytes))
 }

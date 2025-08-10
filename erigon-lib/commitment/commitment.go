@@ -1064,7 +1064,7 @@ func (t *Updates) TouchAccount(c *KeyUpdate, val []byte) {
 		c.update.Flags |= RawBytesUpdate
 		c.update.RawBytes = make([]byte, len(val))
 		copy(c.update.RawBytes, val)
-		return
+		return // skip deserialisation
 	}
 
 	acc := accounts.Account{}

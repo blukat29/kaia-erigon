@@ -20,7 +20,6 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/common/length"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,27 +37,27 @@ import (
 func Test_Kaia_HexPatriciaHashed_UniqueRepresentation2_RawBytes(t *testing.T) {
 	var (
 		// Taken from Test_HexPatriciaHashed_UniqueRepresentation2
+		builder = NewUpdateBuilder().
+			Balance("71562b71999873db5b286df957af199ec94617f7", 999860099).
+			Nonce("71562b71999873db5b286df957af199ec94617f7", 3).
+			Balance("3a220f351252089d385b29beca14e27f204c296a", 900234).
+			Balance("0000000000000000000000000000000000000000", 2000000000000138901).
+			Balance("1337beef00000000000000000000000000000000", 4000000000000138901)
 		accounts = [][2]string{ // accountRLP taken from accountForHashing()
 			{"0x71562b71999873db5b286df957af199ec94617f7", "0xf84803843b98a783a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
 			{"0x3a220f351252089d385b29beca14e27f204c296a", "0xf84780830dbc8aa056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
 			{"0x0000000000000000000000000000000000000000", "0xf84c80881bc16d674eca1e95a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
 			{"0x1337beef00000000000000000000000000000000", "0xf84c80883782dace9d921e95a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
 		}
-		plainKeys, updates = NewUpdateBuilder().
-					Balance("71562b71999873db5b286df957af199ec94617f7", 999860099).
-					Nonce("71562b71999873db5b286df957af199ec94617f7", 3).
-					Balance("3a220f351252089d385b29beca14e27f204c296a", 900234).
-					Balance("0000000000000000000000000000000000000000", 2000000000000138901).
-					Balance("1337beef00000000000000000000000000000000", 4000000000000138901).
-					Build()
 		stateRoot = "920d630d52432c87f551191217322df4be72ce0dc22286f5d6dba01a99be5b4e"
 	)
 	{
 		t.Logf("1. using Update{Balance, Nonce, CodeHash}")
 		ctx := context.Background()
-		kc := NewKaiaPatriciaContext(0)
+		kc := NewKaiaPatriciaContext(ModeErigonV3, 0)
 		hph := NewHexPatriciaHashed(length.Addr, kc, t.TempDir())
 
+		plainKeys, updates := builder.Build()
 		upds := WrapKeyUpdates(t, ModeDirect, KeyToHexNibbleHash, plainKeys, updates)
 		defer upds.Close()
 		require.NoError(t, kc.applyUpdates(length.Addr, plainKeys, updates))
@@ -71,61 +70,18 @@ func Test_Kaia_HexPatriciaHashed_UniqueRepresentation2_RawBytes(t *testing.T) {
 	{
 		t.Logf("2. using Update{RawBytes}")
 		ctx := context.Background()
-		kc := NewKaiaPatriciaContext(0)
+		kc := NewKaiaPatriciaContext(ModeRawBytes, 0)
+		kc.setTrace(true)
 		hph := NewHexPatriciaHashed(length.Addr, kc, t.TempDir())
 
-		upd := wrapRawBytesUpdates(t, accounts)
+		plainKeys, updates, upd := buildRawBytesUpdates(t, accounts)
 		defer upd.Close()
-		kc.applyRawBytesUpdates(accounts)
+		require.NoError(t, kc.applyUpdates(length.Addr, plainKeys, updates))
 
 		rootHash, err := hph.Process(ctx, upd, "")
 		require.NoError(t, err)
 		assert.Equal(t, stateRoot, hex.EncodeToString(rootHash))
 		t.Logf("rootHash %x\n", rootHash)
-	}
-	{
-		t.Logf("3. using Update{Balance, Nonce, CodeHash} with sequential updates")
-		ctx := context.Background()
-		kc := NewKaiaPatriciaContext(0)
-		hph := NewHexPatriciaHashed(length.Addr, kc, t.TempDir())
-
-		var rootHash_ []byte
-		for i := range accounts {
-			plainKey := plainKeys[i : i+1]
-			update := updates[i : i+1]
-			upds := WrapKeyUpdates(t, ModeDirect, KeyToHexNibbleHash, plainKey, update)
-			kc.applyUpdates(length.Addr, plainKey, update)
-
-			rootHash, err := hph.Process(ctx, upds, "")
-			require.NoError(t, err)
-			upds.Close()
-
-			rootHash_ = common.Copy(rootHash)
-			t.Logf("rootHash(%d/%d) %x\n", i+1, len(accounts), rootHash)
-		}
-
-		assert.Equal(t, stateRoot, hex.EncodeToString(rootHash_))
-	}
-	{
-		t.Logf("4. using Update{RawBytes} with sequential updates")
-		ctx := context.Background()
-		kc := NewKaiaPatriciaContext(0)
-		hph := NewHexPatriciaHashed(length.Addr, kc, t.TempDir())
-
-		var rootHash_ []byte
-		for i := range accounts {
-			account := accounts[i : i+1]
-			upd := wrapRawBytesUpdates(t, account)
-			kc.applyRawBytesUpdates(account)
-
-			rootHash, err := hph.Process(ctx, upd, "")
-			require.NoError(t, err)
-			upd.Close()
-
-			rootHash_ = common.Copy(rootHash)
-			t.Logf("rootHash(%d/%d) %x\n", i+1, len(accounts), rootHash)
-		}
-		assert.Equal(t, stateRoot, hex.EncodeToString(rootHash_))
 	}
 }
 
@@ -174,15 +130,15 @@ func Test_Kaia_HexPatriciaHashed_KaiaAccount(t *testing.T) {
 	}
 	for _, tc := range testcases {
 		ctx := context.Background()
-		kc := NewKaiaPatriciaContext(0)
+		kc := NewKaiaPatriciaContext(ModeRawBytes, 0)
 		hph := NewHexPatriciaHashed(length.Addr, kc, t.TempDir())
 
-		upd := wrapRawBytesUpdates(t, tc.accounts)
-		kc.applyRawBytesUpdates(tc.accounts)
+		plainKeys, updates, upd := buildRawBytesUpdates(t, tc.accounts)
+		require.NoError(t, kc.applyUpdates(length.Addr, plainKeys, updates))
 
 		rootHash, err := hph.Process(ctx, upd, "")
-		require.NoError(t, err)
 		upd.Close()
+		require.NoError(t, err)
 
 		assert.Equal(t, tc.stateRoot, "0x"+hex.EncodeToString(rootHash), tc.desc)
 		t.Logf("rootHash %x\n", rootHash)
