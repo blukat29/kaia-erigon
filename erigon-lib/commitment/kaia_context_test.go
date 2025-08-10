@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/erigontech/erigon-lib/common/hexutil"
 	"github.com/erigontech/erigon-lib/common/length"
 	"github.com/erigontech/erigon-lib/types/accounts"
 	"github.com/stretchr/testify/assert"
@@ -200,4 +201,26 @@ func Test_KaiaPatriciaContext_ApplyUpdatesForTest(t *testing.T) {
 	u, err = kc.Storage([]byte{0x03, 0x56})
 	require.NoError(t, err)
 	assert.Equal(t, "050505", hex.EncodeToString(u.Storage[:u.StorageLen]))
+}
+
+func wrapRawBytesUpdates(t *testing.T, accounts [][2]string) *Updates {
+	upd := NewUpdates(ModeUpdate, t.TempDir(), KeyToHexNibbleHash)
+	for _, account := range accounts {
+		address, accountRLP := hexutil.MustDecode(account[0]), hexutil.MustDecode(account[1])
+		upd.TouchPlainKey(string(address), accountRLP, func(c *KeyUpdate, _ []byte) {
+			c.plainKey = string(address)
+			c.hashedKey = KeyToHexNibbleHash(address)
+			c.update.Flags = RawBytesUpdate
+			c.update.RawBytes = accountRLP
+		})
+	}
+	return upd
+}
+
+// Batch inject states for testing.
+func (kc *KaiaPatriciaContext) applyRawBytesUpdates(accounts [][2]string) {
+	for _, account := range accounts {
+		address, accountRLP := hexutil.MustDecode(account[0]), hexutil.MustDecode(account[1])
+		kc.PutAccount([]byte(address), accountRLP)
+	}
 }

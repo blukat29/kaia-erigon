@@ -1060,6 +1060,12 @@ func (t *Updates) TouchAccount(c *KeyUpdate, val []byte) {
 	if c.update.Flags&DeleteUpdate != 0 {
 		c.update.Flags = 0 // also could invert with ^ but 0 is just a reset
 	}
+	if c.update.Flags&RawBytesUpdate != 0 {
+		c.update.Flags |= RawBytesUpdate
+		c.update.RawBytes = make([]byte, len(val))
+		copy(c.update.RawBytes, val)
+		return
+	}
 
 	acc := accounts.Account{}
 	err := accounts.DeserialiseV3(&acc, val)
