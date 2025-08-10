@@ -191,6 +191,25 @@ func buildRawBytesUpdates(t *testing.T, accounts [][2]string) ([][]byte, []Updat
 	return plainKeys, updates, upd
 }
 
+func buildStorageUpdates(t *testing.T, address string, storage [][2]string) ([][]byte, []Update, *Updates) {
+	plainKeys := make([][]byte, len(storage))
+	updates := make([]Update, len(storage))
+
+	upd := NewUpdates(ModeDirect, t.TempDir(), KeyToHexNibbleHash)
+	for i, slot := range storage {
+		slotIndex, slotValue := hexutil.MustDecode(slot[0]), hexutil.MustDecode(slot[1])
+		plainKeys[i] = append(hexutil.MustDecode(address), slotIndex...)
+		u := &Update{
+			Flags:      StorageUpdate,
+			StorageLen: len(slotValue),
+		}
+		copy(u.Storage[:], slotValue)
+		updates[i] = *u
+		upd.TouchPlainKey(string(plainKeys[i]), slotValue, upd.TouchStorage)
+	}
+	return plainKeys, updates, upd
+}
+
 func Test_KaiaPatriciaContext_applyUpdates_ModeErigonV3(t *testing.T) {
 	accountKeyLen := 1 // for simplicity
 	plainKeys, updates := NewUpdateBuilder().

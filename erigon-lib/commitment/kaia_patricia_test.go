@@ -20,7 +20,9 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/erigontech/erigon-lib/common/hexutil"
 	"github.com/erigontech/erigon-lib/common/length"
+	"github.com/erigontech/erigon-lib/rlp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,11 +32,11 @@ import (
 // (2) Calculate storage root of an account and return the storage root hash
 //
 // Some test cases were taken from hex_patricia_hashed_test.go
-// Test_HexPatriciaHashed_UniqueRepresentation2 ~ Test_Kaia_HexPatriciaHashed_UniqueRepresentation2_RawBytes
+// Test_HexPatriciaHashed_UniqueRepresentation2 ~ Test_Kaia_HexPatriciaHashed_UniqueRepresentation2
 
 // Using the ErigonV3 encoding as specimen, test that Update{RawBytes} can represent the same accounts
 // as Update{Balance, Nonce, CodeHash}
-func Test_Kaia_HexPatriciaHashed_UniqueRepresentation2_RawBytes(t *testing.T) {
+func Test_Kaia_HexPatriciaHashed_UniqueRepresentation2(t *testing.T) {
 	var (
 		// Taken from Test_HexPatriciaHashed_UniqueRepresentation2
 		builder = NewUpdateBuilder().
@@ -85,7 +87,7 @@ func Test_Kaia_HexPatriciaHashed_UniqueRepresentation2_RawBytes(t *testing.T) {
 	}
 }
 
-func Test_Kaia_HexPatriciaHashed_KaiaAccount(t *testing.T) {
+func Test_Kaia_HexPatriciaHashed_KaiaAccount_RawBytes(t *testing.T) {
 	testcases := []struct {
 		desc      string
 		accounts  [][2]string // address, accountRLP
@@ -143,4 +145,67 @@ func Test_Kaia_HexPatriciaHashed_KaiaAccount(t *testing.T) {
 		assert.Equal(t, tc.stateRoot, "0x"+hex.EncodeToString(rootHash), tc.desc)
 		t.Logf("rootHash %x\n", rootHash)
 	}
+}
+
+func Test_Kaia_HexPatriciaHashed_StorageRoot(t *testing.T) {
+	var (
+		// Kairos block #505584, contract 0x9fdd7a341308e969527bd6c928068edee8399807
+		address = "0x9fdd7a341308e969527bd6c928068edee8399807"
+		storage = [][2]string{
+			{"0x0000000000000000000000000000000000000000000000000000000000000003", mustDecodeRLP(t, "0xa0424820546f6b656e000000000000000000000000000000000000000000000010")},
+			{"0x0000000000000000000000000000000000000000000000000000000000000004", mustDecodeRLP(t, "0xa04248540000000000000000000000000000000000000000000000000000000006")},
+			{"0x0000000000000000000000000000000000000000000000000000000000000005", mustDecodeRLP(t, "0x95efef9fe22a5e1ae68baea7069dcb1ac607ed78cf12")},
+			{"0x0000000000000000000000000000000000000000000000000000000000000002", mustDecodeRLP(t, "0x8c033b2e3c9fd0803ce8000000")},
+			{"0x3eaa2d76dda4c78c477b7231cb487c2b8fa646a998125bc96085f54b529e14a6", mustDecodeRLP(t, "0x8c033b2e3c9fd0803ce8000000")},
+		}
+
+		// kaia.getAccount('0x9fdd7a341308e969527bd6c928068edee8399807', 505584)
+		storageRoot = "0x41fbe8aca458c42a31464a6eff4e221b66f6ffd341a6836c33bf677f63810329"
+		accountRLP  = "0x02f849c501808003c0a041fbe8aca458c42a31464a6eff4e221b66f6ffd341a6836c33bf677f63810329a0e4fc5786883b715cd4ea3e4970357eafcd8d76c992023c590fe934d655c20dcb80"
+
+		// Hypothetical state trie with only one account because we can't reproduce all accounts in Kairos block #505584 in this test.
+		stateRoot = "0x019626d8de9176415ca8169f98742ae112e7783c3e38605f9622d626b27a3b6c"
+	)
+
+	{
+		t.Logf("1. calculate storage root")
+		ctx := context.Background()
+		kc := NewKaiaPatriciaContext(ModeRawBytes, 0)
+		kc.setTrace(true)
+		hph := NewHexPatriciaHashed(length.Addr, kc, t.TempDir())
+
+		plainKeys, updates, upd := buildStorageUpdates(t, address, storage)
+		require.NoError(t, kc.applyUpdates(length.Addr, plainKeys, updates))
+
+		rootHash, err := hph.Process(ctx, upd, "")
+		upd.Close()
+		require.NoError(t, err)
+
+		assert.Equal(t, storageRoot, "0x"+hex.EncodeToString(rootHash))
+		t.Logf("rootHash %x\n", rootHash)
+	}
+	// Assume that calculated storageRoot was used to encode the accountRLP.
+	{
+		t.Logf("2. calculate state root")
+		ctx := context.Background()
+		kc := NewKaiaPatriciaContext(ModeRawBytes, 0)
+		hph := NewHexPatriciaHashed(length.Addr, kc, t.TempDir())
+
+		plainKeys, updates, upd := buildRawBytesUpdates(t, [][2]string{{address, accountRLP}})
+		require.NoError(t, kc.applyUpdates(length.Addr, plainKeys, updates))
+
+		rootHash, err := hph.Process(ctx, upd, "")
+		upd.Close()
+		require.NoError(t, err)
+
+		assert.Equal(t, stateRoot, "0x"+hex.EncodeToString(rootHash))
+		t.Logf("rootHash %x\n", rootHash)
+	}
+}
+
+func mustDecodeRLP(t *testing.T, s string) string {
+	b := hexutil.MustDecode(s)
+	var v []byte
+	require.NoError(t, rlp.DecodeBytes(b, &v))
+	return "0x" + hex.EncodeToString(v)
 }
