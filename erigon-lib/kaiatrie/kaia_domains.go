@@ -35,6 +35,7 @@ import (
 // without coordination.
 type DomainManager struct {
 	mu     sync.Mutex
+	dirs   datadir.Dirs
 	logger log.Logger
 
 	db  kv.TemporalRwDB
@@ -63,10 +64,19 @@ func newKaiaDomainManager(rawDB kv.RwDB, dirs datadir.Dirs, logger log.Logger) (
 	db := temporal.New(rawDB, agg)
 
 	return &DomainManager{
+		dirs:   dirs,
 		logger: logger,
 		db:     db,
 		agg:    agg,
 	}, nil
+}
+
+func (domm *DomainManager) TmpDir() string {
+	return domm.dirs.Tmp
+}
+
+func (domm *DomainManager) StepSize() uint64 {
+	return domm.agg.StepSize()
 }
 
 func (domm *DomainManager) WithTx(fn func(sd *state.SharedDomains) (commit bool, err error)) error {
