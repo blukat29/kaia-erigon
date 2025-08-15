@@ -95,6 +95,11 @@ func Test_AccountTrie_Ephemeral(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, common.HexToHash(tc.stateRoot), rootHash, tc.desc)
 
+		// 1-1. Check that Hash() is idempotent.
+		rootHash2, err := trie.Hash()
+		require.NoError(t, err)
+		require.Equal(t, rootHash, rootHash2, tc.desc)
+
 		// 2. Check the keys.
 		for _, account := range tc.accounts {
 			address, accountRLP := common.HexToAddress(account[0]), hexutil.MustDecode(account[1])

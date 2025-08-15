@@ -1077,6 +1077,10 @@ func (sdc *SharedDomainsCommitmentContext) readStorage(plainKey []byte) (enc []b
 	return enc, nil
 }
 
+func (sdc *SharedDomainsCommitmentContext) AccountRaw(plainKey []byte) ([]byte, error) {
+	return sdc.readAccount(plainKey)
+}
+
 func (sdc *SharedDomainsCommitmentContext) Account(plainKey []byte) (u *commitment.Update, err error) {
 	encAccount, err := sdc.readAccount(plainKey)
 	if err != nil {

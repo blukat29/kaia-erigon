@@ -32,6 +32,9 @@ type KaiaAccountTrie struct {
 	hph     *commitment.HexPatriciaHashed   // merkle hash calculator
 	updates *commitment.Updates             // not-yet hashed Updates
 
+	readNum  *uint64
+	writeNum *uint64
+
 	trace bool // for debugging.
 }
 
@@ -94,10 +97,9 @@ func (t *KaiaAccountTrie) Get(address common.Address) ([]byte, error) {
 
 func (t *KaiaAccountTrie) Hash() (common.Hash, error) {
 	rootHash := common.Hash{}
-
 	t.domm.WithTx(func(sd *state.SharedDomains) (commit bool, err error) {
-		dbCtx := sd.GetCommitmentContext()
-		t.kctx.SetUnderlyingCtx(dbCtx)
+		t.kctx.SetUnderlyingCtx(sd.GetCommitmentContext())
+		defer t.kctx.SetUnderlyingCtx(nil)
 
 		hash, err := t.hph.Process(context.Background(), t.updates, "")
 		if err != nil {
@@ -107,4 +109,23 @@ func (t *KaiaAccountTrie) Hash() (common.Hash, error) {
 		return false, nil
 	})
 	return rootHash, nil
+}
+
+func (t *KaiaAccountTrie) Commit() (common.Hash, error) {
+	rootHash, err := t.Hash()
+	if err != nil {
+		return common.Hash{}, err
+	}
+
+	if t.writeNum == nil {
+		// Do not commit anything
+		return rootHash, nil
+	}
+
+	err = t.domm.WithTx(func(sd *state.SharedDomains) (commit bool, err error) {
+		t.kctx.SetUnderlyingCtx(sd.GetCommitmentContext())
+		defer t.kctx.SetUnderlyingCtx(nil)
+		return true, nil
+	})
+	return rootHash, err
 }
