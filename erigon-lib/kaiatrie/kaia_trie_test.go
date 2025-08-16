@@ -22,6 +22,8 @@ import (
 	"github.com/erigontech/erigon-lib/common/hexutil"
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/erigontech/erigon-lib/state"
+	"github.com/erigontech/erigon-lib/types/accounts"
+	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -118,4 +120,106 @@ func Test_AccountTrie_Ephemeral(t *testing.T) {
 			return false, nil
 		})
 	}
+}
+
+func Test_AccountTrie_WriteGenesis(t *testing.T) {
+	for _, tc := range getAccountTrieTCs() {
+		// Create database and trie.
+		domm, err := NewTemporaryDomainManager(t.TempDir())
+		require.NoError(t, err)
+		defer domm.Close()
+
+		trie, err := NewKaiaAccountTrie(domm, common.Hash{}, true)
+		require.NoError(t, err)
+
+		// Update the keys.
+		for _, account := range tc.accounts {
+			address, accountRLP := common.HexToAddress(account[0]), hexutil.MustDecode(account[1])
+			trie.Update(address, accountRLP)
+		}
+
+		// 1. Check the root hash.
+		rootHash, err := trie.Hash()
+		require.NoError(t, err)
+		require.Equal(t, common.HexToHash(tc.stateRoot), rootHash, tc.desc)
+
+		// 1-1. Check that Hash() is idempotent.
+		rootHash2, err := trie.Hash()
+		require.NoError(t, err)
+		require.Equal(t, rootHash, rootHash2, tc.desc)
+
+		// 2. Check the keys.
+		for _, account := range tc.accounts {
+			address, accountRLP := common.HexToAddress(account[0]), hexutil.MustDecode(account[1])
+			acc, err := trie.Get(address)
+			require.NoError(t, err)
+			require.Equal(t, accountRLP, acc, tc.desc)
+		}
+
+		// 3. Commit the trie.
+		rootHash, err = trie.Commit()
+		require.NoError(t, err)
+		require.Equal(t, common.HexToHash(tc.stateRoot), rootHash, tc.desc)
+
+		// 4. Check that database is still empty.
+		domm.WithTx(func(sd *state.SharedDomains) (commit bool, err error) {
+			for _, account := range tc.accounts {
+				key := string(hexutil.MustDecode(account[0]))
+				v, _, _ := sd.GetLatest(kv.AccountsDomain, []byte(key))
+				assert.Nil(t, v)
+			}
+			return false, nil
+		})
+	}
+}
+
+func TestSharedDomains(t *testing.T) {
+	domm, err := NewTemporaryDomainManager(t.TempDir())
+	require.NoError(t, err)
+	defer domm.Close()
+
+	var (
+		addr = common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").Bytes()
+		acc1 = accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(1)})
+		acc2 = accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(2)})
+		acc3 = accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(3)})
+	)
+
+	domm.WithTx(func(sd *state.SharedDomains) (commit bool, err error) {
+		sd.SetBlockNum(0)
+		sd.SetTxNum(1)
+		sd.DomainPut(kv.AccountsDomain, addr, nil, acc1, nil, 0)
+		return true, nil
+	})
+	domm.WithTx(func(sd *state.SharedDomains) (commit bool, err error) {
+		sd.SetBlockNum(1)
+		sd.SetTxNum(2)
+		sd.DomainPut(kv.AccountsDomain, addr, nil, acc2, nil, 0)
+		return true, nil
+	})
+	domm.WithTx(func(sd *state.SharedDomains) (commit bool, err error) {
+		sd.SetBlockNum(2)
+		sd.SetTxNum(3)
+		sd.DomainPut(kv.AccountsDomain, addr, nil, acc3, nil, 0)
+		return true, nil
+	})
+
+	err = domm.WithTx(func(sd *state.SharedDomains) (commit bool, err error) {
+		acc, err := sd.GetCommitmentContext().AccountRaw(addr)
+		require.NoError(t, err)
+		require.Equal(t, acc2, acc)
+
+		sd.GetCommitmentContext().SetLimitReadAsOfTxNum(3, false)
+		acc, err = sd.GetCommitmentContext().AccountRaw(addr)
+		require.NoError(t, err)
+		require.Equal(t, acc3, acc)
+
+		sd.GetCommitmentContext().SetLimitReadAsOfTxNum(1, true)
+		acc, err = sd.GetCommitmentContext().AccountRaw(addr)
+		require.NoError(t, err)
+		require.Equal(t, acc2, acc)
+
+		return false, nil
+	})
+	require.NoError(t, err)
 }

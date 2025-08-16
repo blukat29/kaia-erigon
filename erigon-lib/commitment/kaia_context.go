@@ -193,6 +193,10 @@ func (kc *KaiaPatriciaContext) DeleteAccount(plainKey []byte) {
 	delete(kc.pendingAccounts, string(plainKey))
 }
 
+func (kc *KaiaPatriciaContext) PendingAccounts() map[string][]byte {
+	return kc.pendingAccounts
+}
+
 func (kc *KaiaPatriciaContext) putAccountUpdate(plainKey []byte, update *Update) error {
 	if update.Flags&DeleteUpdate != 0 {
 		kc.DeleteAccount(plainKey)

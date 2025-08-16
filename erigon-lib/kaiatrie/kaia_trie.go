@@ -23,6 +23,7 @@ import (
 	"github.com/erigontech/erigon-lib/commitment"
 	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/common/length"
+	"github.com/erigontech/erigon-lib/kv"
 	"github.com/erigontech/erigon-lib/state"
 )
 
@@ -43,11 +44,18 @@ func NewKaiaAccountTrie(domm *DomainManager, rootHash common.Hash, writeGenesis 
 	tmpDir := domm.TmpDir()
 
 	var kctx *commitment.KaiaPatriciaContext
+	var readNum, writeNum *uint64
 	if isRootEmpty && !writeGenesis {
 		// Temporary trie. No DB backend, No commit.
 		kctx = commitment.NewKaiaPatriciaContext(commitment.ModeRawBytes, 0)
+		readNum = nil
+		writeNum = nil
 	} else if isRootEmpty && writeGenesis {
 		// Writing to genesis. Read from block 0, commit to block 0.
+		kctx = commitment.NewKaiaPatriciaContext(commitment.ModeRawBytes, 0)
+		one := uint64(1)
+		readNum = &one
+		writeNum = &one
 	} else if !isRootEmpty && !writeGenesis {
 		// Writing to existing block. Read from N, commit to N+1.
 	} else {
@@ -63,6 +71,9 @@ func NewKaiaAccountTrie(domm *DomainManager, rootHash common.Hash, writeGenesis 
 		updates: updates,
 		kctx:    kctx,
 		hph:     hph,
+
+		readNum:  readNum,
+		writeNum: writeNum,
 	}, nil
 }
 
@@ -125,6 +136,13 @@ func (t *KaiaAccountTrie) Commit() (common.Hash, error) {
 	err = t.domm.WithTx(func(sd *state.SharedDomains) (commit bool, err error) {
 		t.kctx.SetUnderlyingCtx(sd.GetCommitmentContext())
 		defer t.kctx.SetUnderlyingCtx(nil)
+		sd.SetTxNum(*t.writeNum)
+		sd.SetBlockNum(0)
+
+		for addr, acc := range t.kctx.PendingAccounts() {
+			sd.DomainPut(kv.AccountsDomain, []byte(addr), nil, acc, nil, 0)
+		}
+
 		return true, nil
 	})
 	return rootHash, err

@@ -147,6 +147,7 @@ func openSharedDomains(db kv.RwDB, logger log.Logger) (*state.SharedDomains, kv.
 
 	sd, err := state.NewSharedDomains(tx, logger)
 	if err != nil {
+		tx.Rollback()
 		return nil, nil, err
 	}
 
