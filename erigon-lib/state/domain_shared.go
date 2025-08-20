@@ -316,6 +316,11 @@ type RebuiltCommitment struct {
 	Keys     uint64
 }
 
+func (sd *SharedDomains) ReloadCommitment() error {
+	_, _, _, err := sd.sdCtx.SeekCommitment(sd.Tx(), sd.aggTx.d[kv.CommitmentDomain], 0, math.MaxUint64)
+	return err
+}
+
 // SeekCommitment lookups latest available commitment and sets it as current
 func (sd *SharedDomains) SeekCommitment(ctx context.Context, tx kv.Tx) (txsFromBlockBeginning uint64, err error) {
 	bn, txn, ok, err := sd.sdCtx.SeekCommitment(tx, sd.aggTx.d[kv.CommitmentDomain], 0, math.MaxUint64)
@@ -1075,6 +1080,10 @@ func (sdc *SharedDomainsCommitmentContext) readStorage(plainKey []byte) (enc []b
 		return nil, fmt.Errorf("GetStorage: failed to read latest storage (latest=%t): %w", sdc.limitReadAsOfTxNum == 0, err)
 	}
 	return enc, nil
+}
+
+func (sdc *SharedDomainsCommitmentContext) AccountRaw(plainKey []byte) (encAccount []byte, err error) {
+	return sdc.readAccount(plainKey)
 }
 
 func (sdc *SharedDomainsCommitmentContext) Account(plainKey []byte) (u *commitment.Update, err error) {

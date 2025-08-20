@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with Erigon. If not, see <http://www.gnu.org/licenses/>.
 
-package state
+package kaiatrie
 
 import (
 	"context"
@@ -21,6 +21,7 @@ import (
 
 	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/kv"
+	"github.com/erigontech/erigon-lib/state"
 	"github.com/erigontech/erigon-lib/types/accounts"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/assert"
@@ -28,7 +29,7 @@ import (
 )
 
 func TestKaia_DomainsManager_BlockNums(t *testing.T) {
-	noop := func(sd *SharedDomains) error { return nil }
+	noop := func(sd *state.SharedDomains) error { return nil }
 	dm, err := NewTemporaryDomainsManager(t.TempDir())
 	require.NoError(t, err)
 	defer dm.Close()
@@ -39,9 +40,9 @@ func TestKaia_DomainsManager_BlockNums(t *testing.T) {
 	assert.NoError(t, dm.WithDomainsRw(2, noop))
 
 	// Cannot commit a block less than last block.
-	assert.ErrorIs(t, dm.WithDomainsRw(1, noop), commitBlockTooLow)
+	assert.ErrorIs(t, dm.WithDomainsRw(1, noop), errCommitBlockTooLow)
 	// Cannot commit a block with a gap from the last block.
-	assert.ErrorIs(t, dm.WithDomainsRw(4, noop), commitBlockTooHigh)
+	assert.ErrorIs(t, dm.WithDomainsRw(4, noop), errCommitBlockTooHigh)
 
 	// Permitted to commit the last block again.
 	assert.NoError(t, dm.WithDomainsRw(2, noop))
@@ -64,7 +65,7 @@ func TestKaia_DomainsManager(t *testing.T) {
 		}
 		hashes = make(map[uint64][]byte)
 
-		commit = func(sd *SharedDomains) error {
+		commit = func(sd *state.SharedDomains) error {
 			n := sd.BlockNum()
 			acc := accs[n]
 			assert.NoError(t, sd.DomainPut(kv.AccountsDomain, addr, nil, acc, nil, 0), n)
@@ -75,10 +76,10 @@ func TestKaia_DomainsManager(t *testing.T) {
 			t.Logf("commit num: %d, hash: %x", n, h)
 			return nil
 		}
-		query = func(sd *SharedDomains) error {
+		query = func(sd *state.SharedDomains) error {
 			n := sd.BlockNum()
 			expectedAcc := accs[n]
-			actualAcc, err := sd.GetCommitmentContext().readAccount(addr)
+			actualAcc, err := sd.GetCommitmentContext().AccountRaw(addr)
 			assert.NoError(t, err)
 			assert.Equal(t, expectedAcc, actualAcc, n)
 

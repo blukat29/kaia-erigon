@@ -13,13 +13,12 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with Erigon. If not, see <http://www.gnu.org/licenses/>.
 
-package state
+package kaiatrie
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sync"
 
 	"github.com/erigontech/erigon-lib/common/datadir"
@@ -28,21 +27,22 @@ import (
 	"github.com/erigontech/erigon-lib/kv/mdbx"
 	"github.com/erigontech/erigon-lib/kv/rawdbv3"
 	"github.com/erigontech/erigon-lib/log/v3"
+	"github.com/erigontech/erigon-lib/state"
 )
 
 var (
-	commitBlockTooLow  = errors.New("block number too low to commit")
-	commitBlockTooHigh = errors.New("block number too high to commit")
+	errCommitBlockTooLow  = errors.New("block number too low to commit")
+	errCommitBlockTooHigh = errors.New("block number too high to commit")
 )
 
-type DomainsUserFn func(sd *SharedDomains) error
+type DomainsUserFn func(sd *state.SharedDomains) error
 
 type txWithAggTx struct {
 	kv.Tx
-	aggTx *AggregatorRoTx
+	aggTx *state.AggregatorRoTx
 }
 
-func newTxWithAggTx(tx kv.Tx, agg *AggregatorRoTx) *txWithAggTx {
+func newTxWithAggTx(tx kv.Tx, agg *state.AggregatorRoTx) *txWithAggTx {
 	return &txWithAggTx{Tx: tx, aggTx: agg}
 }
 
@@ -54,7 +54,7 @@ type DomainsManager struct {
 	logger log.Logger
 
 	db  kv.RwDB
-	agg *Aggregator
+	agg *state.Aggregator
 }
 
 func NewTemporaryDomainsManager(dir string) (*DomainsManager, error) {
@@ -74,7 +74,7 @@ func NewTemporaryDomainsManager(dir string) (*DomainsManager, error) {
 
 func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB) (*DomainsManager, error) {
 	// eth/backend.go:setUpBlockReader
-	agg, err := NewAggregator2(context.Background(), dirs, config3.DefaultStepSize, db, logger)
+	agg, err := state.NewAggregator2(context.Background(), dirs, config3.DefaultStepSize, db, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ func (dm *DomainsManager) WithDomains(blockNum uint64, commit bool, fn DomainsUs
 	aggTx := dm.agg.BeginFilesRo()
 	defer aggTx.Close()
 
-	sd, err := NewSharedDomains(newTxWithAggTx(tx, aggTx), dm.logger)
+	sd, err := state.NewSharedDomains(newTxWithAggTx(tx, aggTx), dm.logger)
 	if err != nil {
 		return err
 	}
@@ -159,16 +159,16 @@ func (dm *DomainsManager) WithDomains(blockNum uint64, commit bool, fn DomainsUs
 	return nil
 }
 
-func setTxNumsForCommit(sd *SharedDomains, tx kv.RwTx, blockNum uint64) error {
+func setTxNumsForCommit(sd *state.SharedDomains, tx kv.RwTx, blockNum uint64) error {
 	lastBlockNum, _, err := rawdbv3.TxNums.Last(tx)
 	if err != nil {
 		return err
 	}
 	if blockNum < lastBlockNum {
-		return fmt.Errorf("%w (want: %d, last %d)", commitBlockTooLow, blockNum, lastBlockNum)
+		return fmt.Errorf("%w (want: %d, last %d)", errCommitBlockTooLow, blockNum, lastBlockNum)
 	}
 	if lastBlockNum+1 < blockNum {
-		return fmt.Errorf("%w (want: %d, last %d)", commitBlockTooHigh, blockNum, lastBlockNum)
+		return fmt.Errorf("%w (want: %d, last %d)", errCommitBlockTooHigh, blockNum, lastBlockNum)
 	}
 
 	// Consolidate all state changes in a single block into one TxNum.
@@ -180,14 +180,13 @@ func setTxNumsForCommit(sd *SharedDomains, tx kv.RwTx, blockNum uint64) error {
 	return nil
 }
 
-func setTxNumsForRead(sd *SharedDomains, blockNum uint64) error {
+func setTxNumsForRead(sd *state.SharedDomains, blockNum uint64) error {
 	sd.SetBlockNum(blockNum)
 	sd.SetTxNum(blockNum + 1)
 	// Read already-committed data up to txNum = less than txNum+1 = less than blockNum+2.
 	sd.GetCommitmentContext().SetLimitReadAsOfTxNum(blockNum+2, false)
 	// Reload hph state with the newly set LimitReadAsOfTxNum.
-	sd.GetCommitmentContext().SeekCommitment(sd.Tx(), sd.aggTx.d[kv.CommitmentDomain], 0, math.MaxUint64)
-	return nil
+	return sd.ReloadCommitment()
 }
 
 func writeTxNums(tx kv.RwTx, blockNum uint64) error {
