@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestKaia_DomainsManager_BlockNums(t *testing.T) {
+func Test_DomainsManager_BlockNums(t *testing.T) {
 	noop := func(sd *state.SharedDomains) error { return nil }
 	dm, err := NewTemporaryDomainsManager(t.TempDir())
 	require.NoError(t, err)
@@ -50,7 +50,7 @@ func TestKaia_DomainsManager_BlockNums(t *testing.T) {
 	assert.NoError(t, dm.WithDomainsRw(3, noop))
 }
 
-func TestKaia_DomainsManager(t *testing.T) {
+func Test_DomainsManager(t *testing.T) {
 	ctx := context.Background()
 	dm, err := NewTemporaryDomainsManager(t.TempDir())
 	require.NoError(t, err)
