@@ -22,11 +22,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/erigontech/erigon-lib/types/accounts"
 	"math/bits"
 	"sort"
 	"strings"
 	"unsafe"
+
+	"github.com/erigontech/erigon-lib/types/accounts"
 
 	"github.com/holiman/uint256"
 
@@ -100,6 +101,10 @@ type Trie interface {
 
 	// Process updates
 	Process(ctx context.Context, updates *Updates, logPrefix string) (rootHash []byte, err error)
+
+	// LastStorageRootHash returns the most recently computed storage root hash.
+	// Only returns the newly computed hash since the construction of the Trie data structure.
+	LastStorageRootHash(addr []byte) []byte
 }
 
 type PatriciaContext interface {

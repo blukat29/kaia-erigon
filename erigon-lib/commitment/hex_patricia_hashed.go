@@ -93,19 +93,23 @@ type HexPatriciaHashed struct {
 
 	memoizationOff bool // if true, do not rely on memoized hashes
 
+	// remember fresh storage root hashes for later retrieval.
+	lastStorageRootHashes map[string][]byte
+
 	//temp buffers
 	accValBuf rlp.RlpEncodedBytes
 }
 
 func NewHexPatriciaHashed(accountKeyLen int, ctx PatriciaContext, tmpdir string) *HexPatriciaHashed {
 	hph := &HexPatriciaHashed{
-		ctx:           ctx,
-		keccak:        sha3.NewLegacyKeccak256().(keccakState),
-		keccak2:       sha3.NewLegacyKeccak256().(keccakState),
-		accountKeyLen: accountKeyLen,
-		auxBuffer:     bytes.NewBuffer(make([]byte, 8192)),
-		hadToLoadL:    make(map[uint64]skipStat),
-		accValBuf:     make(rlp.RlpEncodedBytes, 128),
+		ctx:                   ctx,
+		keccak:                sha3.NewLegacyKeccak256().(keccakState),
+		keccak2:               sha3.NewLegacyKeccak256().(keccakState),
+		accountKeyLen:         accountKeyLen,
+		auxBuffer:             bytes.NewBuffer(make([]byte, 8192)),
+		hadToLoadL:            make(map[uint64]skipStat),
+		accValBuf:             make(rlp.RlpEncodedBytes, 128),
+		lastStorageRootHashes: make(map[string][]byte),
 	}
 	hph.branchEncoder = NewBranchEncoder(1024, filepath.Join(tmpdir, "branch-encoder"))
 	return hph
@@ -985,6 +989,7 @@ func (hph *HexPatriciaHashed) computeCellHash(cell *cell, depth int, buf []byte)
 			cell.setFromUpdate(update)
 		}
 
+		hph.setLastStorageRootHash(cell.accountAddr, storageRootHash)
 		valLen := cell.accountForHashing(hph.accValBuf, storageRootHash)
 		buf, err = hph.accountLeafHashWithKey(buf, cell.hashedExtension[:65-depth], hph.accValBuf[:valLen])
 		if err != nil {
@@ -2138,6 +2143,19 @@ func (hph *HexPatriciaHashed) Process(ctx context.Context, updates *Updates, log
 	return rootHash, nil
 }
 
+func (hph *HexPatriciaHashed) setLastStorageRootHash(addr [length.Addr]byte, storageRoot [length.Hash]byte) {
+	if hph.trace {
+		fmt.Printf("lastStorageRootHash account %x storageRoot %x\n", addr[:], storageRoot[:])
+	}
+	addrS := string(addr[:])
+	hph.lastStorageRootHashes[addrS] = storageRoot[:]
+}
+
+func (hph *HexPatriciaHashed) LastStorageRootHash(addr []byte) []byte {
+	addrS := string(addr[:])
+	return hph.lastStorageRootHashes[addrS]
+}
+
 func (hph *HexPatriciaHashed) SetTrace(trace bool) { hph.trace = trace }
 
 func (hph *HexPatriciaHashed) Variant() TrieVariant { return VariantHexPatriciaTrie }
@@ -2148,6 +2166,7 @@ func (hph *HexPatriciaHashed) Reset() {
 	hph.rootTouched = false
 	hph.rootChecked = false
 	hph.rootPresent = true
+	hph.lastStorageRootHashes = make(map[string][]byte)
 }
 
 func (hph *HexPatriciaHashed) ResetContext(ctx PatriciaContext) {

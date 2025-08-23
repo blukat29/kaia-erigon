@@ -17,13 +17,18 @@ package kaiatrie
 
 import (
 	"context"
+	"errors"
 
+	"github.com/erigontech/erigon-lib/common/hexutil"
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/erigontech/erigon-lib/state"
 )
 
 var (
 	_ Trie = (*SingleTxAccountTrie)(nil)
+
+	emptyEncAccountE3 = hexutil.MustDecode("0x00000000") // accounts.SerialiseV3(&accounts.Account{})
+	emptyRoot         = hexutil.MustDecode("0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
 )
 
 type SingleTxAccountTrie struct {
@@ -71,4 +76,75 @@ func (t *SingleTxAccountTrie) Commit() ([]byte, error) {
 	}
 
 	return h, nil
+}
+
+type SingleTxStorageTrie struct {
+	sd   *state.SharedDomains
+	addr []byte
+}
+
+func NewSingleTxStorageTrie(sd *state.SharedDomains, addr []byte) *SingleTxStorageTrie {
+	encAccount, _ := sd.GetCommitmentContext().AccountRaw(addr)
+	if encAccount == nil {
+		sd.DomainPut(kv.AccountsDomain, addr, nil, emptyEncAccountE3, nil, 0)
+	}
+	return &SingleTxStorageTrie{sd: sd, addr: addr}
+}
+
+func (t *SingleTxStorageTrie) Get(key []byte) ([]byte, error) {
+	u, err := t.sd.GetCommitmentContext().Storage(t.storageKey(key))
+	if err != nil {
+		return nil, err
+	}
+	return u.Storage[:], nil
+}
+
+func (t *SingleTxStorageTrie) Update(key []byte, value []byte) error {
+	return t.sd.DomainPut(kv.StorageDomain, t.storageKey(key), nil, value, nil, 0)
+}
+
+func (t *SingleTxStorageTrie) Delete(key []byte) error {
+	return t.sd.DomainDel(kv.StorageDomain, t.storageKey(key), nil, nil, 0)
+}
+
+func (t *SingleTxStorageTrie) hash() ([]byte, error) {
+	_, err := t.sd.ComputeCommitment(context.Background(), true, t.sd.BlockNum(), "")
+	if err != nil {
+		return nil, err
+	}
+	// Note that LastStorageRootHash is only filled if there was a storage update.
+	// In DeferredTrie, we are given the previous storage root hash via the OpenTrie argument, so we can return it.
+	// But SingleTxStorageTrie doesn't have that. That is okay because SingleTxStorageTrie is only used for testing.
+	storageRoot := t.sd.GetCommitmentContext().Trie().LastStorageRootHash(t.addr)
+	if len(storageRoot) == 0 {
+		return nil, errors.New("storage root hash not calculated")
+	}
+	return storageRoot, nil
+}
+
+func (t *SingleTxStorageTrie) Hash() []byte {
+	h, err := t.hash()
+	if err != nil {
+		return []byte{}
+	}
+	return h
+}
+
+func (t *SingleTxStorageTrie) Commit() ([]byte, error) {
+	h, err := t.hash()
+	if err != nil {
+		return nil, err
+	}
+
+	rwTx := t.sd.Tx().(kv.RwTx)
+	t.sd.Flush(context.Background(), rwTx)
+	if err := rwTx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return h, nil
+}
+
+func (t *SingleTxStorageTrie) storageKey(key []byte) []byte {
+	return append(t.addr, key...)
 }
