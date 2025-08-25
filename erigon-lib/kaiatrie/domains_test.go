@@ -102,3 +102,87 @@ func Test_DomainsManager(t *testing.T) {
 	require.NoError(t, dm.WithDomainsRo(1, query))
 	require.NoError(t, dm.WithDomainsRo(2, query))
 }
+
+func Test_DomainsRoConcurrent(t *testing.T) {
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	var (
+		accs = map[string][]byte{
+			string(common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes()): accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(90)}),
+			string(common.HexToAddress("0x2222222222222222222222222222222222222222").Bytes()): accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(91)}),
+			string(common.HexToAddress("0x3333333333333333333333333333333333333333").Bytes()): accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(92)}),
+		}
+	)
+
+	// Commit some data
+	require.NoError(t, dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
+		for addr, acc := range accs {
+			sd.DomainPut(kv.AccountsDomain, []byte(addr), nil, acc, nil, 0)
+		}
+		return nil
+	}))
+
+	// Interleave two WithDomainsRo threads.
+	ch := make(chan bool, 1)
+
+	go func() {
+		require.NoError(t, dm.WithDomainsRo(0, func(sd *state.SharedDomains) error {
+			for addr, acc := range accs {
+				actualAcc, err := sd.GetCommitmentContext().AccountRaw([]byte(addr))
+				t.Logf("T1: read %x = %x", addr, actualAcc)
+				assert.NoError(t, err)
+				assert.Equal(t, acc, actualAcc)
+				ch <- true
+			}
+			return nil
+		}))
+	}()
+
+	require.NoError(t, dm.WithDomainsRo(0, func(sd *state.SharedDomains) error {
+		for addr, acc := range accs {
+			<-ch
+			actualAcc, err := sd.GetCommitmentContext().AccountRaw([]byte(addr))
+			t.Logf("T2: read %x = %x", addr, actualAcc)
+			assert.NoError(t, err)
+			assert.Equal(t, acc, actualAcc)
+		}
+		return nil
+	}))
+}
+
+func Benchmark_DomainsRo(b *testing.B) {
+	dm, err := NewTemporaryDomainsManager(b.TempDir())
+	require.NoError(b, err)
+	defer dm.Close()
+
+	var (
+		addr = common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes()
+		acc  = accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(90)})
+	)
+
+	// Commit some data
+	require.NoError(b, dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
+		sd.DomainPut(kv.AccountsDomain, addr, nil, acc, nil, 0)
+		return nil
+	}))
+
+	b.Run("keep RoTx open", func(b *testing.B) {
+		dm.WithDomainsRo(0, func(sd *state.SharedDomains) error {
+			for i := 0; i < b.N; i++ {
+				sd.GetCommitmentContext().AccountRaw(addr)
+			}
+			return nil
+		})
+	})
+
+	b.Run("open RoTx every read", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			dm.WithDomainsRo(0, func(sd *state.SharedDomains) error {
+				sd.GetCommitmentContext().AccountRaw(addr)
+				return nil
+			})
+		}
+	})
+}

@@ -103,14 +103,33 @@ func (dm *DomainsManager) Close() {
 }
 
 func (dm *DomainsManager) WithDomainsRo(blockNum uint64, fn DomainsUserFn) error {
-	return dm.WithDomains(blockNum, false, fn)
+	ctx := context.Background()
+
+	tx, err := dm.db.BeginRo(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	aggTx := dm.agg.BeginFilesRo()
+	defer aggTx.Close()
+
+	sd, err := state.NewSharedDomains(newTxWithAggTx(tx, aggTx), dm.logger)
+	if err != nil {
+		return err
+	}
+	defer sd.Close()
+
+	if err := setTxNumsForRead(sd, blockNum); err != nil {
+		return err
+	}
+	if err := fn(sd); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (dm *DomainsManager) WithDomainsRw(blockNum uint64, fn DomainsUserFn) error {
-	return dm.WithDomains(blockNum, true, fn)
-}
-
-func (dm *DomainsManager) WithDomains(blockNum uint64, commit bool, fn DomainsUserFn) error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
@@ -131,30 +150,20 @@ func (dm *DomainsManager) WithDomains(blockNum uint64, commit bool, fn DomainsUs
 	}
 	defer sd.Close()
 
-	if commit {
-		if err := setTxNumsForCommit(sd, tx, blockNum); err != nil {
-			return err
-		}
-	} else {
-		if err := setTxNumsForRead(sd, blockNum); err != nil {
-			return err
-		}
+	if err := setTxNumsForCommit(sd, tx, blockNum); err != nil {
+		return err
 	}
-
 	if err := fn(sd); err != nil {
 		return err
 	}
-
-	if commit {
-		if err := writeTxNums(tx, blockNum); err != nil {
-			return err
-		}
-		if err := sd.Flush(ctx, tx); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
+	if err := writeTxNums(tx, blockNum); err != nil {
+		return err
+	}
+	if err := sd.Flush(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	return nil
 }
