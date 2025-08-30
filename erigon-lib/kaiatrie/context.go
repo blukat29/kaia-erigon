@@ -31,8 +31,7 @@ import (
 var (
 	_ commitment.PatriciaContext = (*DeferredContext)(nil)
 
-	// The key in CommitmentDomain that SharedDomains uses to store the latest hph state.
-	keyCommitmentState = []byte("state")
+	keyHphState = []byte("hphstate") // hphstate => Latest hph state and respective blockNum, txNum
 
 	errNoDomains = errors.New("cannot operate without domains")
 	errNotLatest = errors.New("cannot operate on non-latest commitment state")
@@ -191,7 +190,7 @@ func (c *DeferredContext) Storage(plainKey []byte) (*commitment.Update, error) {
 }
 
 func (c *DeferredContext) PutBranch(prefix []byte, data []byte, prevData []byte, prevStep uint64) error {
-	c.tracef("ctx.PutBranch %x: %x, %x, %d\n", prefix, data, prevData, prevStep)
+	c.tracef("ctx.PutBranch %x: %x, %d\n", prefix, data, prevStep)
 	c.pendingBranches[string(prefix)] = pendingBranch{
 		data:     data,
 		prevData: prevData,
@@ -202,13 +201,13 @@ func (c *DeferredContext) PutBranch(prefix []byte, data []byte, prevData []byte,
 
 func (c *DeferredContext) Branch(prefix []byte) ([]byte, uint64, error) {
 	if pb, ok := c.pendingBranches[string(prefix)]; ok {
-		c.tracef("ctx.Branch(pending) %x: %x, %x, %d\n", prefix, pb.data, pb.prevData, pb.prevStep)
+		c.tracef("ctx.Branch(pending) %x: %x, %d\n", prefix, pb.data, pb.prevStep)
 		return pb.data, pb.prevStep, nil
 	}
 
 	if c.sd != nil {
 		u, step, err := c.sd.GetCommitmentContext().Branch(prefix)
-		c.tracef("ctx.Branch(db) %x: %x, %d, %v\n", prefix, u, step, err)
+		c.tracef("ctx.Branch(db) %x: %x, %d\n", prefix, u, step)
 		return u, step, err
 	}
 
@@ -227,18 +226,19 @@ func (c *DeferredContext) loadHphState() error {
 	// Must use the keyCommitmentState because it is special keyword in SharedDomains, bypassing any Branch-specific logic.
 	// Because CommitmentDomain does not store history (see erigon-lib/state/aggregator2.go:Schema[kv.CommitmentDomain]),
 	// Branch() will always return the latest state.
-	cs, _, err := c.sd.GetCommitmentContext().Branch(keyCommitmentState)
+	cs, err := customGet(c.sd, keyHphState)
 	if err != nil {
 		return err
 	}
 
 	// Special case where the database is empty, i.e. not even genesis block is committed.
 	if len(cs) == 0 {
+		c.tracef("ctx.Load empty state\n")
 		c.trieStateLoaded = true
 		return nil
 	}
 
-	txNum, blockNum, state, err := state.DecodeCommitmentState(cs)
+	txNum, blockNum, hphState, err := state.DecodeCommitmentState(cs)
 	if err != nil {
 		return err
 	}
@@ -250,8 +250,8 @@ func (c *DeferredContext) loadHphState() error {
 		return fmt.Errorf("%w: stored txNum=%d blockNum=%d context txNum=%d blockNum=%d", errNotLatest, txNum, blockNum, c.sd.TxNum(), c.sd.BlockNum())
 	}
 
-	c.tracef("ctx.Load hash(hphstate)=%x\n", crypto.Keccak256(state))
-	c.trie.SetState(state)
+	c.tracef("ctx.Load hash(hphstate)=%x\n", crypto.Keccak256(hphState))
+	c.trie.SetState(hphState)
 	c.trieStateLoaded = true
 	return nil
 }
@@ -275,10 +275,9 @@ func (c *DeferredContext) Commit() error {
 	if c.sd == nil {
 		return fmt.Errorf("cannot commit pending changes: %w", errNoDomains)
 	}
-	c.tracef("ctx.Commit to blockNum=%d txNum=%d\n", c.sd.BlockNum(), c.sd.TxNum())
+	c.tracef("ctx.Commit to blockNum=%d txNum=%d len(accounts)=%d len(storages)=%d len(branches)=%d\n", c.sd.BlockNum(), c.sd.TxNum(), len(c.pendingAccounts), len(c.pendingStorages), len(c.pendingBranches))
 
 	// Commit pending accounts.
-	c.tracef("ctx.Commit %d accounts\n", len(c.pendingAccounts))
 	for addr, acc := range c.pendingAccounts {
 		if err := c.sd.DomainPut(kv.AccountsDomain, []byte(addr), nil, acc, nil, 0); err != nil {
 			return err
@@ -286,7 +285,6 @@ func (c *DeferredContext) Commit() error {
 	}
 
 	// Commit pending storages.
-	c.tracef("ctx.Commit %d storages\n", len(c.pendingStorages))
 	for plainKey, encStorage := range c.pendingStorages {
 		if err := c.sd.DomainPut(kv.StorageDomain, []byte(plainKey), nil, encStorage, nil, 0); err != nil {
 			return err
@@ -294,7 +292,6 @@ func (c *DeferredContext) Commit() error {
 	}
 
 	// Commit pending branches.
-	c.tracef("ctx.Commit %d branches\n", len(c.pendingBranches))
 	for prefix, pb := range c.pendingBranches {
 		if err := c.sd.GetCommitmentContext().PutBranch([]byte(prefix), pb.data, pb.prevData, pb.prevStep); err != nil {
 			return err
@@ -311,9 +308,21 @@ func (c *DeferredContext) Commit() error {
 	if err != nil {
 		return err
 	}
-	if err := c.sd.DomainPut(kv.CommitmentDomain, []byte("state"), nil, cs, nil, 0); err != nil {
+	if err := customPut(c.sd, keyHphState, cs); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// Abuse the `ReceiptDomain` to store custom data (i.e. not account/storage/branch). This is safe because
+// (1) ReceiptDomain is irrelevant to the state trie processing.
+// (2) Kaia will use its own database for receipts, so ReceiptDomain is not used for storing receipts.
+func customGet(sd *state.SharedDomains, key []byte) ([]byte, error) {
+	data, _, err := sd.GetLatest(kv.ReceiptDomain, key)
+	return data, err
+}
+
+func customPut(sd *state.SharedDomains, key []byte, data []byte) error {
+	return sd.DomainPut(kv.ReceiptDomain, key, nil, data, nil, 0)
 }

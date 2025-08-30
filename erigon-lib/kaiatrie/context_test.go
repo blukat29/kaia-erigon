@@ -30,6 +30,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func Test_Context_CustomSchema(t *testing.T) {
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
+		customPut(sd, []byte("abc"), []byte("xyz"))
+		return nil
+	})
+
+	dm.WithDomainsRo(1, func(sd *state.SharedDomains) error {
+		data, err := customGet(sd, []byte("abc"))
+		require.NoError(t, err)
+		assert.Equal(t, []byte("xyz"), data)
+		return nil
+	})
+}
+
 // Test the Update type return values.
 func Test_Context_Get(t *testing.T) {
 	var (

@@ -19,11 +19,40 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/erigontech/erigon-lib/commitment"
 	"github.com/erigontech/erigon-lib/common/hexutil"
 	"github.com/erigontech/erigon-lib/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func checkTrieGet(t *testing.T, trie Trie, items [][2]string) {
+	for _, item := range items {
+		key, expectedVal := hexutil.MustDecode(item[0]), hexutil.MustDecode(item[1])
+		val, err := trie.Get(key)
+		require.NoError(t, err)
+		assert.Equal(t, expectedVal, val)
+	}
+}
+
+func checkTrieUpdate(t *testing.T, trie Trie, items [][2]string) {
+	for _, item := range items {
+		key, val := hexutil.MustDecode(item[0]), hexutil.MustDecode(item[1])
+		require.NoError(t, trie.Update(key, val))
+	}
+}
+
+func checkTrieHash(t *testing.T, trie Trie, expectedHash string) {
+	hash, err := trie.Hash()
+	require.NoError(t, err)
+	assert.Equal(t, expectedHash, hex.EncodeToString(hash))
+}
+
+func checkTrieCommit(t *testing.T, trie Trie, expectedHash string) {
+	hash, err := trie.Commit()
+	require.NoError(t, err)
+	assert.Equal(t, expectedHash, hex.EncodeToString(hash))
+}
 
 func Test_SingleTxAccountTrie(t *testing.T) {
 	var (
@@ -41,9 +70,15 @@ func Test_SingleTxAccountTrie(t *testing.T) {
 			{"0x71562b71999873db5b286df957af199ec94617f7", "0x01040602220adf74630000"},
 			{"0x3a220f351252089d385b29beca14e27f204c296a", "0x00030c840a0000"},
 			{"0x0000000000000000000000000000000000000000", "0x000829a2241af62e1e950000"},
-			{"0x1337beef00000000000000000000000000000000", "0x00083782dace9d921e950000"}, // no change example
 		}
 		expectedHash2 = "4125375597c6290eb53103f518ea9486a121c3874d844307f7bc1ad7f9fa0c54"
+
+		accountsMerged = [][2]string{
+			{"0x71562b71999873db5b286df957af199ec94617f7", "0x01040602220adf74630000"},
+			{"0x3a220f351252089d385b29beca14e27f204c296a", "0x00030c840a0000"},
+			{"0x0000000000000000000000000000000000000000", "0x000829a2241af62e1e950000"},
+			{"0x1337beef00000000000000000000000000000000", "0x00083782dace9d921e950000"},
+		}
 	)
 
 	dm, err := NewTemporaryDomainsManager(t.TempDir())
@@ -53,65 +88,39 @@ func Test_SingleTxAccountTrie(t *testing.T) {
 	// Inspect empty state.
 	require.NoError(t, dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
 		trie := NewSingleTxAccountTrie(sd)
-		hash, err := trie.Hash()
-		require.NoError(t, err)
-		assert.Equal(t, "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421", hex.EncodeToString(hash))
+		checkTrieHash(t, trie, hex.EncodeToString(commitment.EmptyRootHash))
 		return nil
 	}))
 
 	// Commit first batch at block 0.
 	require.NoError(t, dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
 		trie := NewSingleTxAccountTrie(sd)
-		for _, acc := range accounts1 {
-			addr, acc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
-			require.NoError(t, trie.Update(addr, acc))
-		}
-		hash, err := trie.Hash()
-		require.NoError(t, err)
-		assert.Equal(t, expectedHash1, hex.EncodeToString(hash))
+		checkTrieUpdate(t, trie, accounts1)
+		checkTrieHash(t, trie, expectedHash1)
 		return nil
 	}))
 
 	// Inspect block 0.
 	require.NoError(t, dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
 		trie := NewSingleTxAccountTrie(sd)
-		for _, acc := range accounts1 {
-			addr, expectedAcc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
-			acc, err := trie.Get(addr)
-			require.NoError(t, err)
-			assert.Equal(t, expectedAcc, acc)
-		}
-		hash, err := trie.Hash()
-		require.NoError(t, err)
-		assert.Equal(t, expectedHash1, hex.EncodeToString(hash))
+		checkTrieGet(t, trie, accounts1)
+		checkTrieHash(t, trie, expectedHash1)
 		return nil
 	}))
 
 	// Commit second batch at block 1.
 	require.NoError(t, dm.WithDomainsRw(1, func(sd *state.SharedDomains) error {
 		trie := NewSingleTxAccountTrie(sd)
-		for _, acc := range accounts2 {
-			addr, acc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
-			require.NoError(t, trie.Update(addr, acc))
-		}
-		hash, err := trie.Hash()
-		require.NoError(t, err)
-		assert.Equal(t, expectedHash2, hex.EncodeToString(hash))
+		checkTrieUpdate(t, trie, accounts2)
+		checkTrieHash(t, trie, expectedHash2)
 		return nil
 	}))
 
 	// Inspect block 1.
 	require.NoError(t, dm.WithDomainsRw(1, func(sd *state.SharedDomains) error {
 		trie := NewSingleTxAccountTrie(sd)
-		for _, acc := range accounts2 {
-			addr, expectedAcc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
-			acc, err := trie.Get(addr)
-			require.NoError(t, err)
-			assert.Equal(t, expectedAcc, acc)
-		}
-		hash, err := trie.Hash()
-		require.NoError(t, err)
-		assert.Equal(t, expectedHash2, hex.EncodeToString(hash))
+		checkTrieGet(t, trie, accountsMerged)
+		checkTrieHash(t, trie, expectedHash2)
 		return nil
 	}))
 }
@@ -201,9 +210,7 @@ func Test_SingleTxStorageTrie(t *testing.T) {
 		for _, s := range expectedStorageRoots {
 			addrS, expectedRoot := s[0], s[1]
 			trie := tries[addrS]
-			hash, err := trie.Hash()
-			require.NoError(t, err, addrS)
-			assert.Equal(t, expectedRoot, hex.EncodeToString(hash), addrS)
+			checkTrieHash(t, trie, expectedRoot)
 		}
 	}
 
@@ -221,7 +228,7 @@ func Test_SingleTxStorageTrie(t *testing.T) {
 			updateAccounts(NewSingleTxAccountTrie(sd))
 			return nil
 		}))
-		// Then update storage, with the presence of the accounts.
+		// Then update storage, given the presence of the accounts.
 		require.NoError(t, dm.WithDomainsRw(1, func(sd *state.SharedDomains) error {
 			updateAndCheckStorage(sd)
 			return nil
@@ -229,9 +236,7 @@ func Test_SingleTxStorageTrie(t *testing.T) {
 		// Check the final state root.
 		require.NoError(t, dm.WithDomainsRo(1, func(sd *state.SharedDomains) error {
 			trie := NewSingleTxAccountTrie(sd)
-			hash, err := trie.Hash()
-			require.NoError(t, err)
-			assert.Equal(t, expectedStateRoot, hex.EncodeToString(hash))
+			checkTrieHash(t, trie, expectedStateRoot)
 			return nil
 		}))
 
@@ -254,9 +259,7 @@ func Test_SingleTxStorageTrie(t *testing.T) {
 			updateAccounts(trie)
 
 			// Check the final state root.
-			hash, err := trie.Hash()
-			require.NoError(t, err)
-			assert.Equal(t, expectedStateRoot, hex.EncodeToString(hash))
+			checkTrieHash(t, trie, expectedStateRoot)
 			return nil
 		}))
 	}
