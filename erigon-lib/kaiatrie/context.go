@@ -16,9 +16,13 @@
 package kaiatrie
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	"github.com/erigontech/erigon-lib/commitment"
+	"github.com/erigontech/erigon-lib/common/length"
+	"github.com/erigontech/erigon-lib/crypto"
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/erigontech/erigon-lib/state"
 	"github.com/erigontech/erigon-lib/types/accounts"
@@ -26,14 +30,27 @@ import (
 
 var (
 	_ commitment.PatriciaContext = (*DeferredContext)(nil)
+
+	// The key in CommitmentDomain that SharedDomains uses to store the latest hph state.
+	keyCommitmentState = []byte("state")
+
+	errNoDomains = errors.New("cannot operate without domains")
+	errNotLatest = errors.New("cannot operate on non-latest commitment state")
 )
 
 type DeferredContext struct {
+	// Unhashed and uncommitted changes.
+	pendingUpdates  *commitment.Updates
+	trie            *commitment.HexPatriciaHashed
+	trieStateLoaded bool
+
+	// Uncommitted changes.
 	pendingAccounts map[string][]byte        // addr[20] => SerialiseV3 (ModeErigonV3) or RawBytes (ModeRawBytes)
 	pendingStorages map[string][]byte        // addr[20] || slot[32] => data[32]
 	pendingBranches map[string]pendingBranch // prefix[] => data[], prevData[], prevStep
 	step            uint64
 
+	// Underlying database.
 	sd *state.SharedDomains
 
 	trace bool
@@ -45,13 +62,16 @@ type pendingBranch struct {
 	prevStep uint64
 }
 
-func NewDeferredContext() *DeferredContext {
-	return &DeferredContext{
+func NewDeferredContext(tmpdir string) *DeferredContext {
+	ctx := &DeferredContext{
+		pendingUpdates:  commitment.NewUpdates(commitment.ModeDirect, tmpdir, commitment.KeyToHexNibbleHash),
 		pendingAccounts: make(map[string][]byte),
 		pendingStorages: make(map[string][]byte),
 		pendingBranches: make(map[string]pendingBranch),
 		step:            0,
 	}
+	ctx.trie = commitment.NewHexPatriciaHashed(length.Addr, ctx, tmpdir)
+	return ctx
 }
 
 func (c *DeferredContext) SetDomains(sd *state.SharedDomains) {
@@ -70,6 +90,8 @@ func (c *DeferredContext) tracef(format string, args ...any) {
 }
 
 func (c *DeferredContext) PutAccount(plainKey []byte, encAccount []byte) {
+	c.tracef("ctx.PutAccount %x: %x\n", plainKey, encAccount)
+	c.pendingUpdates.TouchPlainKey(string(plainKey), encAccount, c.pendingUpdates.TouchAccount)
 	c.pendingAccounts[string(plainKey)] = encAccount
 }
 
@@ -123,6 +145,8 @@ func (c *DeferredContext) Account(plainKey []byte) (*commitment.Update, error) {
 }
 
 func (c *DeferredContext) PutStorage(plainKey []byte, encStorage []byte) {
+	c.tracef("ctx.PutStorage %x: %x\n", plainKey, encStorage)
+	c.pendingUpdates.TouchPlainKey(string(plainKey), encStorage, c.pendingUpdates.TouchStorage)
 	c.pendingStorages[string(plainKey)] = encStorage
 }
 
@@ -192,13 +216,69 @@ func (c *DeferredContext) Branch(prefix []byte) ([]byte, uint64, error) {
 	return nil, 0, nil
 }
 
-// Commit pending changes to database.
-func (c *DeferredContext) Commit() error {
-	if c.sd == nil {
+// Load the internal state of HexPatriciaHashed (hph state) before hashing new updates.
+// The database stores the latest block's hph state. We can only work from there, so we will only calculate
+// the root hash of the pending block only.
+func (c *DeferredContext) loadHphState() error {
+	if c.trieStateLoaded {
 		return nil
 	}
 
+	// Must use the keyCommitmentState because it is special keyword in SharedDomains, bypassing any Branch-specific logic.
+	// Because CommitmentDomain does not store history (see erigon-lib/state/aggregator2.go:Schema[kv.CommitmentDomain]),
+	// Branch() will always return the latest state.
+	cs, _, err := c.sd.GetCommitmentContext().Branch(keyCommitmentState)
+	if err != nil {
+		return err
+	}
+
+	// Special case where the database is empty, i.e. not even genesis block is committed.
+	if len(cs) == 0 {
+		c.trieStateLoaded = true
+		return nil
+	}
+
+	txNum, blockNum, state, err := state.DecodeCommitmentState(cs)
+	if err != nil {
+		return err
+	}
+
+	// Make sure the provided `sd` is at the latest block. Otherwise, we will be wrongly calculate the
+	// root hash of an historic block (sd.BlockNum()) from the latest hph state (cs)
+	c.tracef("ctx.Load stored blockNum=%d txNum=%d context blockNum=%d txNum=%d\n", blockNum, txNum, c.sd.BlockNum(), c.sd.TxNum())
+	if txNum != c.sd.TxNum() || blockNum != c.sd.BlockNum() {
+		return fmt.Errorf("%w: stored txNum=%d blockNum=%d context txNum=%d blockNum=%d", errNotLatest, txNum, blockNum, c.sd.TxNum(), c.sd.BlockNum())
+	}
+
+	c.tracef("ctx.Load hash(hphstate)=%x\n", crypto.Keccak256(state))
+	c.trie.SetState(state)
+	c.trieStateLoaded = true
+	return nil
+}
+
+func (c *DeferredContext) Hash() ([]byte, error) {
+	// Load the last hph state before processing new updates.
+	if c.sd == nil {
+		return nil, fmt.Errorf("cannot calculate merkle root hash: %w", errNoDomains)
+	}
+	if err := c.loadHphState(); err != nil {
+		return nil, err
+	}
+
+	rootHash, err := c.trie.Process(context.Background(), c.pendingUpdates, "")
+	c.tracef("ctx.Hash len(updates)=%d, rootHash=%x\n", c.pendingUpdates.Size(), rootHash)
+	return rootHash, err
+}
+
+// Commit pending changes to database.
+func (c *DeferredContext) Commit() error {
+	if c.sd == nil {
+		return fmt.Errorf("cannot commit pending changes: %w", errNoDomains)
+	}
+	c.tracef("ctx.Commit to blockNum=%d txNum=%d\n", c.sd.BlockNum(), c.sd.TxNum())
+
 	// Commit pending accounts.
+	c.tracef("ctx.Commit %d accounts\n", len(c.pendingAccounts))
 	for addr, acc := range c.pendingAccounts {
 		if err := c.sd.DomainPut(kv.AccountsDomain, []byte(addr), nil, acc, nil, 0); err != nil {
 			return err
@@ -206,6 +286,7 @@ func (c *DeferredContext) Commit() error {
 	}
 
 	// Commit pending storages.
+	c.tracef("ctx.Commit %d storages\n", len(c.pendingStorages))
 	for plainKey, encStorage := range c.pendingStorages {
 		if err := c.sd.DomainPut(kv.StorageDomain, []byte(plainKey), nil, encStorage, nil, 0); err != nil {
 			return err
@@ -213,10 +294,25 @@ func (c *DeferredContext) Commit() error {
 	}
 
 	// Commit pending branches.
+	c.tracef("ctx.Commit %d branches\n", len(c.pendingBranches))
 	for prefix, pb := range c.pendingBranches {
 		if err := c.sd.GetCommitmentContext().PutBranch([]byte(prefix), pb.data, pb.prevData, pb.prevStep); err != nil {
 			return err
 		}
+	}
+
+	// Commit hph state.
+	hphState, err := c.trie.EncodeCurrentState(nil)
+	if err != nil {
+		return err
+	}
+	c.tracef("ctx.Commit hash(hphstate)=%x\n", crypto.Keccak256(hphState))
+	cs, err := state.EncodeCommitmentState(c.sd.TxNum(), c.sd.BlockNum(), hphState)
+	if err != nil {
+		return err
+	}
+	if err := c.sd.DomainPut(kv.CommitmentDomain, []byte("state"), nil, cs, nil, 0); err != nil {
+		return err
 	}
 
 	return nil

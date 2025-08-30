@@ -50,7 +50,7 @@ func Test_DomainsManager_BlockNums(t *testing.T) {
 	assert.NoError(t, dm.WithDomainsRw(3, noop))
 }
 
-func Test_DomainsManager(t *testing.T) {
+func Test_DomainsManager_Accounts(t *testing.T) {
 	ctx := context.Background()
 	dm, err := NewTemporaryDomainsManager(t.TempDir())
 	require.NoError(t, err)
@@ -103,7 +103,7 @@ func Test_DomainsManager(t *testing.T) {
 	require.NoError(t, dm.WithDomainsRo(2, query))
 }
 
-func Test_DomainsRoConcurrent(t *testing.T) {
+func Test_DomainsManager_RoConcurrent(t *testing.T) {
 	dm, err := NewTemporaryDomainsManager(t.TempDir())
 	require.NoError(t, err)
 	defer dm.Close()
