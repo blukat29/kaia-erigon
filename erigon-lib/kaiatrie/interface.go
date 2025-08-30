@@ -19,6 +19,6 @@ type Trie interface {
 	Get(key []byte) ([]byte, error)
 	Update(key []byte, value []byte) error
 	Delete(key []byte) error
-	Hash() []byte
+	Hash() ([]byte, error)
 	Commit() ([]byte, error)
 }

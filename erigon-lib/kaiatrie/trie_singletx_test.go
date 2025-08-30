@@ -53,7 +53,8 @@ func Test_SingleTxAccountTrie(t *testing.T) {
 	// Inspect empty state.
 	require.NoError(t, dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
 		trie := NewSingleTxAccountTrie(sd)
-		hash := trie.Hash()
+		hash, err := trie.Hash()
+		require.NoError(t, err)
 		assert.Equal(t, "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421", hex.EncodeToString(hash))
 		return nil
 	}))
@@ -65,7 +66,9 @@ func Test_SingleTxAccountTrie(t *testing.T) {
 			addr, acc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
 			require.NoError(t, trie.Update(addr, acc))
 		}
-		assert.Equal(t, expectedHash1, hex.EncodeToString(trie.Hash()))
+		hash, err := trie.Hash()
+		require.NoError(t, err)
+		assert.Equal(t, expectedHash1, hex.EncodeToString(hash))
 		return nil
 	}))
 
@@ -78,7 +81,9 @@ func Test_SingleTxAccountTrie(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, expectedAcc, acc)
 		}
-		assert.Equal(t, expectedHash1, hex.EncodeToString(trie.Hash()))
+		hash, err := trie.Hash()
+		require.NoError(t, err)
+		assert.Equal(t, expectedHash1, hex.EncodeToString(hash))
 		return nil
 	}))
 
@@ -89,7 +94,9 @@ func Test_SingleTxAccountTrie(t *testing.T) {
 			addr, acc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
 			require.NoError(t, trie.Update(addr, acc))
 		}
-		assert.Equal(t, expectedHash2, hex.EncodeToString(trie.Hash()))
+		hash, err := trie.Hash()
+		require.NoError(t, err)
+		assert.Equal(t, expectedHash2, hex.EncodeToString(hash))
 		return nil
 	}))
 
@@ -102,7 +109,9 @@ func Test_SingleTxAccountTrie(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, expectedAcc, acc)
 		}
-		assert.Equal(t, expectedHash2, hex.EncodeToString(trie.Hash()))
+		hash, err := trie.Hash()
+		require.NoError(t, err)
+		assert.Equal(t, expectedHash2, hex.EncodeToString(hash))
 		return nil
 	}))
 }
@@ -192,8 +201,8 @@ func Test_SingleTxStorageTrie(t *testing.T) {
 		for _, s := range expectedStorageRoots {
 			addrS, expectedRoot := s[0], s[1]
 			trie := tries[addrS]
-			hash, err := trie.hash()
-			assert.NoError(t, err, addrS)
+			hash, err := trie.Hash()
+			require.NoError(t, err, addrS)
 			assert.Equal(t, expectedRoot, hex.EncodeToString(hash), addrS)
 		}
 	}
@@ -220,7 +229,9 @@ func Test_SingleTxStorageTrie(t *testing.T) {
 		// Check the final state root.
 		require.NoError(t, dm.WithDomainsRo(1, func(sd *state.SharedDomains) error {
 			trie := NewSingleTxAccountTrie(sd)
-			assert.Equal(t, expectedStateRoot, hex.EncodeToString(trie.Hash()))
+			hash, err := trie.Hash()
+			require.NoError(t, err)
+			assert.Equal(t, expectedStateRoot, hex.EncodeToString(hash))
 			return nil
 		}))
 
@@ -243,7 +254,9 @@ func Test_SingleTxStorageTrie(t *testing.T) {
 			updateAccounts(trie)
 
 			// Check the final state root.
-			assert.Equal(t, expectedStateRoot, hex.EncodeToString(trie.Hash()))
+			hash, err := trie.Hash()
+			require.NoError(t, err)
+			assert.Equal(t, expectedStateRoot, hex.EncodeToString(hash))
 			return nil
 		}))
 	}

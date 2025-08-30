@@ -51,20 +51,12 @@ func (t *SingleTxAccountTrie) Delete(key []byte) error {
 	return t.sd.DomainDel(kv.AccountsDomain, key, nil, nil, 0)
 }
 
-func (t *SingleTxAccountTrie) hash() ([]byte, error) {
+func (t *SingleTxAccountTrie) Hash() ([]byte, error) {
 	return t.sd.ComputeCommitment(context.Background(), true, t.sd.BlockNum(), "")
 }
 
-func (t *SingleTxAccountTrie) Hash() []byte {
-	h, err := t.hash()
-	if err != nil {
-		return []byte{}
-	}
-	return h
-}
-
 func (t *SingleTxAccountTrie) Commit() ([]byte, error) {
-	h, err := t.hash()
+	h, err := t.Hash()
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +78,8 @@ type SingleTxStorageTrie struct {
 func NewSingleTxStorageTrie(sd *state.SharedDomains, addr []byte) *SingleTxStorageTrie {
 	encAccount, _ := sd.GetCommitmentContext().AccountRaw(addr)
 	if encAccount == nil {
+		// Add a surrogate account so HPH can calculate the storage root hash for this account even if
+		// the account does not exist just yet. Usually happens in contract deployment transaction's constructor().
 		sd.DomainPut(kv.AccountsDomain, addr, nil, emptyEncAccountE3, nil, 0)
 	}
 	return &SingleTxStorageTrie{sd: sd, addr: addr}
@@ -107,7 +101,7 @@ func (t *SingleTxStorageTrie) Delete(key []byte) error {
 	return t.sd.DomainDel(kv.StorageDomain, t.storageKey(key), nil, nil, 0)
 }
 
-func (t *SingleTxStorageTrie) hash() ([]byte, error) {
+func (t *SingleTxStorageTrie) Hash() ([]byte, error) {
 	_, err := t.sd.ComputeCommitment(context.Background(), true, t.sd.BlockNum(), "")
 	if err != nil {
 		return nil, err
@@ -122,16 +116,8 @@ func (t *SingleTxStorageTrie) hash() ([]byte, error) {
 	return storageRoot, nil
 }
 
-func (t *SingleTxStorageTrie) Hash() []byte {
-	h, err := t.hash()
-	if err != nil {
-		return []byte{}
-	}
-	return h
-}
-
 func (t *SingleTxStorageTrie) Commit() ([]byte, error) {
-	h, err := t.hash()
+	h, err := t.Hash()
 	if err != nil {
 		return nil, err
 	}
