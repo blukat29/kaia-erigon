@@ -18,6 +18,7 @@ package kaiatrie
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/erigontech/erigon-lib/common/hexutil"
 	"github.com/erigontech/erigon-lib/kv"
@@ -26,9 +27,11 @@ import (
 
 var (
 	_ Trie = (*SingleTxAccountTrie)(nil)
+	_ Trie = (*SingleTxStorageTrie)(nil)
 
 	emptyEncAccountE3 = hexutil.MustDecode("0x00000000") // accounts.SerialiseV3(&accounts.Account{})
-	emptyRoot         = hexutil.MustDecode("0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
+
+	errNoStorageRoot = errors.New("storage root hash not calculated")
 )
 
 type SingleTxAccountTrie struct {
@@ -86,7 +89,7 @@ func NewSingleTxStorageTrie(sd *state.SharedDomains, addr []byte) *SingleTxStora
 }
 
 func (t *SingleTxStorageTrie) Get(key []byte) ([]byte, error) {
-	u, err := t.sd.GetCommitmentContext().Storage(t.storageKey(key))
+	u, err := t.sd.GetCommitmentContext().Storage(storageKey(t.addr, key))
 	if err != nil {
 		return nil, err
 	}
@@ -94,11 +97,11 @@ func (t *SingleTxStorageTrie) Get(key []byte) ([]byte, error) {
 }
 
 func (t *SingleTxStorageTrie) Update(key []byte, value []byte) error {
-	return t.sd.DomainPut(kv.StorageDomain, t.storageKey(key), nil, value, nil, 0)
+	return t.sd.DomainPut(kv.StorageDomain, storageKey(t.addr, key), nil, value, nil, 0)
 }
 
 func (t *SingleTxStorageTrie) Delete(key []byte) error {
-	return t.sd.DomainDel(kv.StorageDomain, t.storageKey(key), nil, nil, 0)
+	return t.sd.DomainDel(kv.StorageDomain, storageKey(t.addr, key), nil, nil, 0)
 }
 
 func (t *SingleTxStorageTrie) Hash() ([]byte, error) {
@@ -111,7 +114,7 @@ func (t *SingleTxStorageTrie) Hash() ([]byte, error) {
 	// But SingleTxStorageTrie doesn't have that. That is okay because SingleTxStorageTrie is only used for testing.
 	storageRoot := t.sd.GetCommitmentContext().Trie().LastStorageRootHash(t.addr)
 	if len(storageRoot) == 0 {
-		return nil, errors.New("storage root hash not calculated")
+		return nil, fmt.Errorf("%w: addr=%x", errNoStorageRoot, t.addr)
 	}
 	return storageRoot, nil
 }
@@ -131,6 +134,6 @@ func (t *SingleTxStorageTrie) Commit() ([]byte, error) {
 	return h, nil
 }
 
-func (t *SingleTxStorageTrie) storageKey(key []byte) []byte {
-	return append(t.addr, key...)
+func storageKey(addr, key []byte) []byte {
+	return append(addr, key...)
 }
