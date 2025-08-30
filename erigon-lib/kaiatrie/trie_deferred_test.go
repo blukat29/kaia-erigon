@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/erigontech/erigon-lib/commitment"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,7 +58,7 @@ func Test_DeferredAccountTrie(t *testing.T) {
 	{
 		t.Log("Opening trie at block 0")
 		trie := NewDeferredAccountTrie(dm, 0, true) // start from block 0, commit to 0 (genesis)
-		trie.SetTrace(true)
+		trie.SetTrace(false)
 
 		// Inspect empty state.
 		checkTrieHash(t, trie, hex.EncodeToString(commitment.EmptyRootHash))
@@ -72,11 +73,15 @@ func Test_DeferredAccountTrie(t *testing.T) {
 
 		// Commit block 0.
 		checkTrieCommit(t, trie, expectedHash1)
+
+		// Inspect post-commit.
+		checkTrieGet(t, trie, accounts1)
+		checkTrieHash(t, trie, expectedHash1)
 	}
 	{
 		t.Log("Opening trie at block 1")
 		trie := NewDeferredAccountTrie(dm, 0, false) // start from block 0, commit to 1
-		trie.SetTrace(true)
+		trie.SetTrace(false)
 
 		// Commit second batch at block 1.
 		checkTrieUpdate(t, trie, accounts2)
@@ -88,14 +93,28 @@ func Test_DeferredAccountTrie(t *testing.T) {
 
 		// Commit block 1.
 		checkTrieCommit(t, trie, expectedHash2)
+
+		// Inspect post-commit.
+		checkTrieGet(t, trie, accountsMerged)
+		checkTrieHash(t, trie, expectedHash2)
 	}
 	{
 		t.Log("Opening trie at block 2")
 		trie := NewDeferredAccountTrie(dm, 1, false) // start from block 1, commit to 2
-		trie.SetTrace(true)
+		trie.SetTrace(false)
 
 		// Inspect block 2.
 		checkTrieGet(t, trie, accountsMerged)
 		checkTrieHash(t, trie, expectedHash2)
+	}
+	{
+		t.Log("Opening trie at block 0")
+		trie := NewDeferredAccountTrie(dm, 0, true) // start from block 0, commit to 0 (genesis)
+		trie.SetTrace(false)
+
+		// Inspect block 0.
+		checkTrieUpdate(t, trie, accounts1)
+		_, err := trie.Hash()
+		assert.ErrorIs(t, err, errNotLatest)
 	}
 }

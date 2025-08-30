@@ -294,7 +294,7 @@ func Test_Context_Override(t *testing.T) {
 
 		// Check block 0
 		ctx := NewDeferredContext(t.TempDir())
-		ctx.SetTrace(true)
+		ctx.SetTrace(false)
 		dm.WithDomainsRo(0, func(sd *state.SharedDomains) error {
 			ctx.SetDomains(sd)
 

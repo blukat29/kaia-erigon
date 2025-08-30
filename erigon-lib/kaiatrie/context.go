@@ -37,6 +37,9 @@ var (
 	errNotLatest = errors.New("cannot operate on non-latest commitment state")
 )
 
+// DeferredContext is an implmentation of PatriciaContext that allows a deferred involvement of the SharedDomains
+// to minimize the usage of the SharedDomains, and database transactions within. This allows concurrent access
+// to the state database, which is required in Kaia statedb.
 type DeferredContext struct {
 	// Unhashed and uncommitted changes.
 	pendingUpdates  *commitment.Updates
@@ -47,10 +50,15 @@ type DeferredContext struct {
 	pendingAccounts map[string][]byte        // addr[20] => SerialiseV3 (ModeErigonV3) or RawBytes (ModeRawBytes)
 	pendingStorages map[string][]byte        // addr[20] || slot[32] => data[32]
 	pendingBranches map[string]pendingBranch // prefix[] => data[], prevData[], prevStep
-	step            uint64
+
+	// Committed at current block.
+	committedAccounts map[string][]byte
+	committedStorages map[string][]byte
+	committedBranches map[string]pendingBranch
 
 	// Underlying database.
-	sd *state.SharedDomains
+	sd   *state.SharedDomains
+	step uint64
 
 	trace bool
 }
@@ -63,11 +71,14 @@ type pendingBranch struct {
 
 func NewDeferredContext(tmpdir string) *DeferredContext {
 	ctx := &DeferredContext{
-		pendingUpdates:  commitment.NewUpdates(commitment.ModeDirect, tmpdir, commitment.KeyToHexNibbleHash),
-		pendingAccounts: make(map[string][]byte),
-		pendingStorages: make(map[string][]byte),
-		pendingBranches: make(map[string]pendingBranch),
-		step:            0,
+		pendingUpdates:    commitment.NewUpdates(commitment.ModeDirect, tmpdir, commitment.KeyToHexNibbleHash),
+		pendingAccounts:   make(map[string][]byte),
+		pendingStorages:   make(map[string][]byte),
+		pendingBranches:   make(map[string]pendingBranch),
+		committedAccounts: make(map[string][]byte),
+		committedStorages: make(map[string][]byte),
+		committedBranches: make(map[string]pendingBranch),
+		step:              0,
 	}
 	ctx.trie = commitment.NewHexPatriciaHashed(length.Addr, ctx, tmpdir)
 	return ctx
@@ -89,14 +100,18 @@ func (c *DeferredContext) tracef(format string, args ...any) {
 }
 
 func (c *DeferredContext) PutAccount(plainKey []byte, encAccount []byte) {
-	c.tracef("ctx.PutAccount %x: %x\n", plainKey, encAccount)
 	c.pendingUpdates.TouchPlainKey(string(plainKey), encAccount, c.pendingUpdates.TouchAccount)
 	c.pendingAccounts[string(plainKey)] = encAccount
+	c.tracef("ctx.PutAccount %x: %x %d\n", plainKey, encAccount, c.pendingUpdates.Size())
 }
 
 func (c *DeferredContext) AccountRaw(plainKey []byte) ([]byte, error) {
 	if data, ok := c.pendingAccounts[string(plainKey)]; ok {
 		c.tracef("ctx.AccountRaw(pending) %x: %x\n", plainKey, data)
+		return data, nil
+	}
+	if data, ok := c.committedAccounts[string(plainKey)]; ok {
+		c.tracef("ctx.AccountRaw(committed) %x: %x\n", plainKey, data)
 		return data, nil
 	}
 
@@ -155,6 +170,10 @@ func (c *DeferredContext) StorageRaw(plainKey []byte) ([]byte, error) {
 		c.tracef("ctx.StorageRaw(pending) %x: %x\n", plainKey, data)
 		return data, nil
 	}
+	if data, ok := c.committedStorages[string(plainKey)]; ok {
+		c.tracef("ctx.StorageRaw(committed) %x: %x\n", plainKey, data)
+		return data, nil
+	}
 
 	// Read from database if available.
 	if c.sd != nil {
@@ -202,6 +221,10 @@ func (c *DeferredContext) PutBranch(prefix []byte, data []byte, prevData []byte,
 func (c *DeferredContext) Branch(prefix []byte) ([]byte, uint64, error) {
 	if pb, ok := c.pendingBranches[string(prefix)]; ok {
 		c.tracef("ctx.Branch(pending) %x: %x, %d\n", prefix, pb.data, pb.prevStep)
+		return pb.data, pb.prevStep, nil
+	}
+	if pb, ok := c.committedBranches[string(prefix)]; ok {
+		c.tracef("ctx.Branch(committed) %x: %x, %d\n", prefix, pb.data, pb.prevStep)
 		return pb.data, pb.prevStep, nil
 	}
 
@@ -265,8 +288,11 @@ func (c *DeferredContext) Hash() ([]byte, error) {
 		return nil, err
 	}
 
+	// Note: c.pendingUpdates will be reset inside Process(), no need to Reset here.
+	// See HexPatriciaHashed.Process() > updates.HashSort() > clear(t.keys)
+	numUpdates := c.pendingUpdates.Size()
 	rootHash, err := c.trie.Process(context.Background(), c.pendingUpdates, "")
-	c.tracef("ctx.Hash len(updates)=%d, rootHash=%x\n", c.pendingUpdates.Size(), rootHash)
+	c.tracef("ctx.Hash len(updates)=%d, rootHash=%x\n", numUpdates, rootHash)
 	return rootHash, err
 }
 
@@ -283,6 +309,8 @@ func (c *DeferredContext) Commit() error {
 			return err
 		}
 	}
+	c.committedAccounts = c.pendingAccounts
+	c.pendingAccounts = make(map[string][]byte)
 
 	// Commit pending storages.
 	for plainKey, encStorage := range c.pendingStorages {
@@ -290,6 +318,8 @@ func (c *DeferredContext) Commit() error {
 			return err
 		}
 	}
+	c.committedStorages = c.pendingStorages
+	c.pendingStorages = make(map[string][]byte)
 
 	// Commit pending branches.
 	for prefix, pb := range c.pendingBranches {
@@ -297,6 +327,8 @@ func (c *DeferredContext) Commit() error {
 			return err
 		}
 	}
+	c.committedBranches = c.pendingBranches
+	c.pendingBranches = make(map[string]pendingBranch)
 
 	// Commit hph state.
 	hphState, err := c.trie.EncodeCurrentState(nil)
