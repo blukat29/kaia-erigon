@@ -273,10 +273,11 @@ func Test_DeferredAccountTrie_ModeRawBytes_Commit(t *testing.T) {
 }
 
 func Test_DeferredAccountTrie_ModeRawBytes_Examples(t *testing.T) {
+	// expectedHash calculated with kaia SecureTrie.
 	testcases := []struct {
-		desc      string
-		accounts  [][2]string // address, accountRLP
-		stateRoot string
+		desc         string
+		accounts     [][2]string // address, accountRLP
+		expectedHash string
 	}{
 		{
 			"Kairos block #1 (3/3)",
@@ -299,6 +300,24 @@ func Test_DeferredAccountTrie_ModeRawBytes_Examples(t *testing.T) {
 			},
 			"ce5a189eee967ca8e1eec27adf378078e5c0a17ef18eae77a13c30c2c44a6e2f",
 		},
+		{
+			// This account happens to be valid in both ErigonV3 (DeserialiseV3) and Kaia (NewAccountSerializer)
+			// This TC ensures that this account is treated as RawBytes, not ErigonV3.
+			"Account RLP is ambiguous between ErigonV3 and Kaia; Kairos block #506176",
+			[][2]string{
+				{"0x22876e7f94872f0b8ae8c2433429d31d89278534", "0x01cc018701b0028e44b0008001c0"},
+			},
+			"591ebca6660ab9abe2f4481cc851e155ffa393295f3603ff76da87aedb5e1167",
+		},
+		{
+			// This account's RLP encoding is very long because of the complex AccountKey it has.
+			// This TC ensures that HexPatriciaHashed can handle it. HPH used to have 128-byte fixed buffer.
+			"Very long account; Kairos block #509948",
+			[][2]string{
+				{"0xcb727cc119e7157e5530aa9af1865647ee354d7f", "0x01f8ca018802bbcbb808a1f0008005f8bca302a1022292ca24cb5b3937ad02b7f70e5f5280d8694ca14547380ada4f15554d825b35a302a103b7ec00e211d0c887f3b3b019cfd3aa403132f04e911e59f90dabca036cb3acc7b87204f86f05f86ce302a1022292ca24cb5b3937ad02b7f70e5f5280d8694ca14547380ada4f15554d825b35e302a103b7ec00e211d0c887f3b3b019cfd3aa403132f04e911e59f90dabca036cb3acc7e301a10342f3364427e59a09c359d9f4516f043ecfd580ee11246c82f2483fb57bbb37d2"},
+			},
+			"2cea07c80a738b0493230213c34beed17a73f311b7017d9aaa921b5dd73bed89",
+		},
 	}
 
 	for _, tc := range testcases {
@@ -307,11 +326,12 @@ func Test_DeferredAccountTrie_ModeRawBytes_Examples(t *testing.T) {
 		defer dm.Close()
 
 		trie := NewDeferredAccountTrie(dm, 0, true, ModeRawBytes)
+		trie.SetTrace(true)
 		for _, acc := range tc.accounts {
 			addr, acc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
 			require.NoError(t, trie.Update(addr, acc))
 		}
-		checkTrieHash(t, trie, tc.stateRoot)
+		checkTrieHash(t, trie, tc.expectedHash)
 	}
 }
 
