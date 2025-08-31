@@ -20,10 +20,19 @@ import (
 	"testing"
 
 	"github.com/erigontech/erigon-lib/commitment"
+	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/common/hexutil"
+	"github.com/erigontech/erigon-lib/rlp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func mustDecodeRLP(t *testing.T, s string) string {
+	b := hexutil.MustDecode(s)
+	var v []byte
+	require.NoError(t, rlp.DecodeBytes(b, &v))
+	return "0x" + hex.EncodeToString(v)
+}
 
 func Test_DeferredAccountTrie_ModeErigonV3(t *testing.T) {
 	var (
@@ -217,5 +226,146 @@ func Test_DeferredStorageTrie_ModeErigonV3(t *testing.T) {
 			trie.ctx.PutStorage(storageKey(addr, key), value)
 		}
 		checkTrieHash(t, trie, expectedStateRoot)
+	}
+}
+
+func Test_DeferredAccountTrie_ModeRawBytes_Commit(t *testing.T) {
+	var (
+		// Kairos block #1
+		accounts = [][2]string{
+			{"0x0000000000000000000000000000000000000400", "0x02f849c580808003c0a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a06c39846f5ab402760078b7bfd16c99e687c75bcb5ec65ac8f3054bad18136f0980"},
+			{"0x4937a6f664630547f6b0c3c235c4f03a64ca36b1", "0x01da8095446c3b15f9926687d2c40534fdb5640000000000008001c0"},
+			{"0xb74ff9dea397fe9e231df545eb53fe2adf776cb2", "0x01cd8088853a0d2313c000008001c0"},
+		}
+		expectedHashes = []string{
+			"fbf14f63f97468e460a42b309bbad44fdc682ab3a7f95fa5d3508c9cf0009946",
+			"be751ffacf5fcf9998d4f90b87164ff95166d55e445c8d27cfecbe0e67a032b6",
+			"60e8f25e2fb479e625347c1f11e2f07c9cd7d0a5320013294d89281b6fceed4f",
+		}
+	)
+
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	{
+		t.Log("Commit block #0 (genesis)")
+		trie := NewDeferredAccountTrie(dm, 0, true, ModeRawBytes) // start from block 0, commit to 0 (genesis)
+		checkTrieHash(t, trie, hex.EncodeToString(commitment.EmptyRootHash))
+		require.NoError(t, trie.Update(hexutil.MustDecode(accounts[0][0]), hexutil.MustDecode(accounts[0][1])))
+		checkTrieCommit(t, trie, expectedHashes[0])
+	}
+	{
+		t.Log("Commit block #1")
+		trie := NewDeferredAccountTrie(dm, 0, false, ModeRawBytes) // start from block 0, commit to 1
+		checkTrieHash(t, trie, expectedHashes[0])
+		require.NoError(t, trie.Update(hexutil.MustDecode(accounts[1][0]), hexutil.MustDecode(accounts[1][1])))
+		checkTrieCommit(t, trie, expectedHashes[1])
+	}
+	{
+		t.Log("Commit block #2")
+		trie := NewDeferredAccountTrie(dm, 1, false, ModeRawBytes) // start from block 1, commit to 2
+		checkTrieHash(t, trie, expectedHashes[1])
+		require.NoError(t, trie.Update(hexutil.MustDecode(accounts[2][0]), hexutil.MustDecode(accounts[2][1])))
+		checkTrieCommit(t, trie, expectedHashes[2])
+		checkTrieGet(t, trie, accounts)
+	}
+}
+
+func Test_DeferredAccountTrie_ModeRawBytes_Examples(t *testing.T) {
+	testcases := []struct {
+		desc      string
+		accounts  [][2]string // address, accountRLP
+		stateRoot string
+	}{
+		{
+			"Kairos block #1 (3/3)",
+			[][2]string{
+				{"0x0000000000000000000000000000000000000400", "0x02f849c580808003c0a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a06c39846f5ab402760078b7bfd16c99e687c75bcb5ec65ac8f3054bad18136f0980"},
+				{"0x4937a6f664630547f6b0c3c235c4f03a64ca36b1", "0x01da8095446c3b15f9926687d2c40534fdb5640000000000008001c0"},
+				{"0xb74ff9dea397fe9e231df545eb53fe2adf776cb2", "0x01cd8088853a0d2313c000008001c0"},
+			},
+			"60e8f25e2fb479e625347c1f11e2f07c9cd7d0a5320013294d89281b6fceed4f",
+		},
+		{
+			"Samples from TestAccountSerializer",
+			[][2]string{
+				{"0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", "0x01c580808001c0"},
+				{"0x70997970C51812dc3A010C7d01b50e0d17dc79C8", "0x01c92a84123456788001c0"},
+				{"0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC", "0x01ea2a84123456788002a1038318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed75"},
+				{"0x90F79bf6EB2c4f870365E785982E1f101E93b906", "0x02f84dc92a84123456788001c0a000112233445566778899aabbccddeeff00112233445566778899aabbccddeeffa0aaaaaaaabbbbbbbbccccccccddddddddaaaaaaaabbbbbbbbccccccccdddddddd10"},
+				{"0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65", "0x01f84dc92a84123456788001c0a000112233445566778899aabbccddeeff00112233445566778899aabbccddeeffa0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a47080"},
+				{"0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc", "0x01f84dc92a84123456788001c0a000112233445566778899aabbccddeeff00112233445566778899aabbccddeeffa0aaaaaaaabbbbbbbbccccccccddddddddaaaaaaaabbbbbbbbccccccccdddddddd10"},
+			},
+			"ce5a189eee967ca8e1eec27adf378078e5c0a17ef18eae77a13c30c2c44a6e2f",
+		},
+	}
+
+	for _, tc := range testcases {
+		dm, err := NewTemporaryDomainsManager(t.TempDir())
+		require.NoError(t, err)
+		defer dm.Close()
+
+		trie := NewDeferredAccountTrie(dm, 0, true, ModeRawBytes)
+		for _, acc := range tc.accounts {
+			addr, acc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
+			require.NoError(t, trie.Update(addr, acc))
+		}
+		checkTrieHash(t, trie, tc.stateRoot)
+	}
+}
+
+func Test_DeferredStorageTrie_ModeRawBytes(t *testing.T) {
+	var (
+		// Kairos block #505584, contract 0x9fdd7a341308e969527bd6c928068edee8399807
+		addr    = common.HexToAddress("0x9fdd7a341308e969527bd6c928068edee8399807").Bytes()
+		storage = [][2]string{
+			{"0x0000000000000000000000000000000000000000000000000000000000000003", mustDecodeRLP(t, "0xa0424820546f6b656e000000000000000000000000000000000000000000000010")},
+			{"0x0000000000000000000000000000000000000000000000000000000000000004", mustDecodeRLP(t, "0xa04248540000000000000000000000000000000000000000000000000000000006")},
+			{"0x0000000000000000000000000000000000000000000000000000000000000005", mustDecodeRLP(t, "0x95efef9fe22a5e1ae68baea7069dcb1ac607ed78cf12")},
+			{"0x0000000000000000000000000000000000000000000000000000000000000002", mustDecodeRLP(t, "0x8c033b2e3c9fd0803ce8000000")},
+			{"0x3eaa2d76dda4c78c477b7231cb487c2b8fa646a998125bc96085f54b529e14a6", mustDecodeRLP(t, "0x8c033b2e3c9fd0803ce8000000")},
+		}
+
+		// kaia.getAccount('0x9fdd7a341308e969527bd6c928068edee8399807', 505584)
+		storageRoot = "41fbe8aca458c42a31464a6eff4e221b66f6ffd341a6836c33bf677f63810329"
+		accountRLP  = "0x02f849c501808003c0a041fbe8aca458c42a31464a6eff4e221b66f6ffd341a6836c33bf677f63810329a0e4fc5786883b715cd4ea3e4970357eafcd8d76c992023c590fe934d655c20dcb80"
+
+		// Hypothetical state trie with only one account because we can't reproduce all accounts in Kairos block #505584 in this test.
+		stateRoot = "019626d8de9176415ca8169f98742ae112e7783c3e38605f9622d626b27a3b6c"
+	)
+	_ = accountRLP
+	_ = stateRoot
+
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	{
+		t.Log("Commit storage trie")
+		trie := NewDeferredStorageTrie(dm, addr, 0, true, ModeRawBytes)
+		for _, s := range storage {
+			key, value := hexutil.MustDecode(s[0]), hexutil.MustDecode(s[1])
+			require.NoError(t, trie.Update(key, value))
+		}
+		checkTrieCommit(t, trie, storageRoot)
+	}
+	{
+		t.Log("Commit account trie")
+		trie := NewDeferredAccountTrie(dm, 0, true, ModeRawBytes)
+		require.NoError(t, trie.Update(addr, hexutil.MustDecode(accountRLP)))
+		checkTrieCommit(t, trie, stateRoot)
+	}
+	{
+		t.Log("Inspect storage trie")
+		trie := NewDeferredStorageTrie(dm, addr, 0, false, ModeRawBytes)
+		checkTrieGet(t, trie, storage)
+	}
+	{
+		t.Log("Inspect account trie")
+		trie := NewDeferredAccountTrie(dm, 0, false, ModeRawBytes)
+		acc, err := trie.Get(addr)
+		require.NoError(t, err)
+		require.Equal(t, hexutil.MustDecode(accountRLP), acc)
 	}
 }
