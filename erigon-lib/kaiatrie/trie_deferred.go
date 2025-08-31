@@ -95,7 +95,7 @@ func (t *DeferredAccountTrie) Commit() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	t.dm.WithDomainsRw(t.rwNum, func(sd *state.SharedDomains) error {
+	err = t.dm.WithDomainsRw(t.rwNum, func(sd *state.SharedDomains) error {
 		t.ctx.SetDomains(sd)
 		return t.ctx.Commit()
 	})
@@ -193,7 +193,7 @@ func (t *DeferredStorageTrie) Commit() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	t.dm.WithDomainsRw(t.rwNum, func(sd *state.SharedDomains) error {
+	err = t.dm.WithDomainsRw(t.rwNum, func(sd *state.SharedDomains) error {
 		t.ctx.SetDomains(sd)
 		return t.ctx.Commit()
 	})

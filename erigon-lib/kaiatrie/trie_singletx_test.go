@@ -31,7 +31,11 @@ func checkTrieGet(t *testing.T, trie Trie, items [][2]string) {
 		key, expectedVal := hexutil.MustDecode(item[0]), hexutil.MustDecode(item[1])
 		val, err := trie.Get(key)
 		require.NoError(t, err)
-		assert.Equal(t, expectedVal, val)
+		if len(expectedVal) > 0 {
+			assert.Equal(t, expectedVal, val)
+		} else {
+			assert.Empty(t, val)
+		}
 	}
 }
 

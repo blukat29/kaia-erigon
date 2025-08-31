@@ -890,10 +890,7 @@ func (sd *SharedDomains) DomainPut(domain kv.Domain, k1, k2 []byte, val, prevVal
 	}
 }
 
-func (sd *SharedDomains) DomainPutRaw(domain kv.Domain, k1, val []byte) error {
-	if val == nil {
-		return fmt.Errorf("DomainPut: %s, trying to put nil value. not allowed", domain)
-	}
+func (sd *SharedDomains) DomainPutOrDelRaw(domain kv.Domain, k1, val []byte) error {
 	prevVal, prevStep, err := sd.GetLatest(domain, k1)
 	if err != nil {
 		return err
@@ -902,8 +899,13 @@ func (sd *SharedDomains) DomainPutRaw(domain kv.Domain, k1, val []byte) error {
 	if bytes.Equal(prevVal, val) {
 		return nil
 	}
-	sd.put(domain, toStringZeroCopy(k1), val)
-	return sd.domainWriters[domain].PutWithPrev(k1, nil, val, prevVal, prevStep)
+	if len(val) == 0 {
+		sd.put(domain, toStringZeroCopy(k1), nil)
+		return sd.domainWriters[domain].DeleteWithPrev(k1, nil, prevVal, prevStep)
+	} else {
+		sd.put(domain, toStringZeroCopy(k1), val)
+		return sd.domainWriters[domain].PutWithPrev(k1, nil, val, prevVal, prevStep)
+	}
 }
 
 // DomainDel

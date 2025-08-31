@@ -113,7 +113,7 @@ func (c *DeferredContext) tracef(format string, args ...any) {
 func (c *DeferredContext) PutAccount(plainKey []byte, encAccount []byte) {
 	c.pendingUpdates.TouchPlainKey(string(plainKey), encAccount, c.pendingUpdates.TouchAccount)
 	c.pendingAccounts[string(plainKey)] = encAccount
-	c.tracef("ctx.PutAccount %x: %x %d\n", plainKey, encAccount, c.pendingUpdates.Size())
+	c.tracef("ctx.PutAccount %x: %x (#%d)\n", plainKey, encAccount, c.pendingUpdates.Size())
 }
 
 func (c *DeferredContext) AccountRaw(plainKey []byte) ([]byte, error) {
@@ -182,9 +182,9 @@ func (c *DeferredContext) Account(plainKey []byte) (*commitment.Update, error) {
 }
 
 func (c *DeferredContext) PutStorage(plainKey []byte, encStorage []byte) {
-	c.tracef("ctx.PutStorage %x: %x\n", plainKey, encStorage)
 	c.pendingUpdates.TouchPlainKey(string(plainKey), encStorage, c.pendingUpdates.TouchStorage)
 	c.pendingStorages[string(plainKey)] = encStorage
+	c.tracef("ctx.PutStorage %x: %x (#%d)\n", plainKey, encStorage, c.pendingUpdates.Size())
 }
 
 func (c *DeferredContext) StorageRaw(plainKey []byte) ([]byte, error) {
@@ -328,7 +328,8 @@ func (c *DeferredContext) Commit() error {
 
 	// Commit pending accounts.
 	for addr, acc := range c.pendingAccounts {
-		if err := c.sd.DomainPutRaw(kv.AccountsDomain, []byte(addr), acc); err != nil {
+		if err := c.sd.DomainPutOrDelRaw(kv.AccountsDomain, []byte(addr), acc); err != nil {
+			fmt.Printf("xx ctx.Commit fail %v\n", err)
 			return err
 		}
 	}
@@ -337,7 +338,7 @@ func (c *DeferredContext) Commit() error {
 
 	// Commit pending storages.
 	for plainKey, encStorage := range c.pendingStorages {
-		if err := c.sd.DomainPutRaw(kv.StorageDomain, []byte(plainKey), encStorage); err != nil {
+		if err := c.sd.DomainPutOrDelRaw(kv.StorageDomain, []byte(plainKey), encStorage); err != nil {
 			return err
 		}
 	}
@@ -379,5 +380,5 @@ func customGet(sd *state.SharedDomains, key []byte) ([]byte, error) {
 }
 
 func customPut(sd *state.SharedDomains, key []byte, data []byte) error {
-	return sd.DomainPutRaw(kv.ReceiptDomain, key, data)
+	return sd.DomainPutOrDelRaw(kv.ReceiptDomain, key, data)
 }
