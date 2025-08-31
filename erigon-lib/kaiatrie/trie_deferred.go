@@ -34,8 +34,8 @@ type DeferredAccountTrie struct {
 	rwNum uint64
 }
 
-func NewDeferredAccountTrie(dm *DomainsManager, blockNum uint64, genesis bool) *DeferredAccountTrie {
-	ctx := NewDeferredContext(dm.dirs.Tmp)
+func NewDeferredAccountTrie(dm *DomainsManager, blockNum uint64, genesis bool, accountMode AccountMode) *DeferredAccountTrie {
+	ctx := NewDeferredContext(dm.dirs.Tmp, accountMode)
 
 	var roNum, rwNum uint64
 	if genesis {
@@ -111,8 +111,8 @@ type DeferredStorageTrie struct {
 	rwNum uint64
 }
 
-func NewDeferredStorageTrie(dm *DomainsManager, addr []byte, blockNum uint64, genesis bool) *DeferredStorageTrie {
-	ctx := NewDeferredContext(dm.dirs.Tmp)
+func NewDeferredStorageTrie(dm *DomainsManager, addr []byte, blockNum uint64, genesis bool, accountMode AccountMode) *DeferredStorageTrie {
+	ctx := NewDeferredContext(dm.dirs.Tmp, accountMode)
 
 	var roNum, rwNum uint64
 	if genesis {

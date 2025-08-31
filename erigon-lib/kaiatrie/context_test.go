@@ -67,7 +67,7 @@ func Test_Context_Get(t *testing.T) {
 		prevStep   = uint64(9)
 	)
 
-	ctx := NewDeferredContext(t.TempDir())
+	ctx := NewDeferredContext(t.TempDir(), ModeErigonV3)
 	ctx.PutAccount(addr1, acc1)
 	ctx.PutAccount(addr2, acc2)
 	ctx.PutAccount(addr3, acc3)
@@ -176,7 +176,7 @@ func Test_Context_Commit(t *testing.T) {
 	{
 		t.Log("2. Write to DeferredContext then commit to SharedDomains later")
 
-		ctx := NewDeferredContext(t.TempDir())
+		ctx := NewDeferredContext(t.TempDir(), ModeErigonV3)
 		ctx.PutAccount(addr1, acc1)
 		ctx.PutAccount(addr2, acc2)
 		ctx.PutAccount(addr3, acc3)
@@ -231,7 +231,7 @@ func Test_Context_Override(t *testing.T) {
 	{
 		t.Log("1. Commit first batch, only operate on new (pending) accounts")
 		// Emulate NewTrie
-		ctx := NewDeferredContext(t.TempDir())
+		ctx := NewDeferredContext(t.TempDir(), ModeErigonV3)
 		ctx.SetTrace(false)
 
 		// Emulate trie.Update
@@ -260,7 +260,7 @@ func Test_Context_Override(t *testing.T) {
 		t.Log("2. Commit second batch, calculate root hash with new and existing accounts")
 
 		// Emulate NewTrie
-		ctx := NewDeferredContext(t.TempDir())
+		ctx := NewDeferredContext(t.TempDir(), ModeErigonV3)
 		ctx.SetTrace(false)
 		dm.WithDomainsRo(0, func(sd *state.SharedDomains) error {
 			ctx.SetDomains(sd)
@@ -293,7 +293,7 @@ func Test_Context_Override(t *testing.T) {
 		t.Log("3. Inspect committed blocks")
 
 		// Check block 0
-		ctx := NewDeferredContext(t.TempDir())
+		ctx := NewDeferredContext(t.TempDir(), ModeErigonV3)
 		ctx.SetTrace(false)
 		dm.WithDomainsRo(0, func(sd *state.SharedDomains) error {
 			ctx.SetDomains(sd)
@@ -332,5 +332,43 @@ func Test_Context_Override(t *testing.T) {
 			return nil
 		})
 	}
+}
 
+func Test_Context_ModeRawBytes(t *testing.T) {
+	var (
+		// Taken from Test_HexPatriciaHashed_UniqueRepresentation2
+		accounts = [][2]string{ // accountRLP taken from accountForHashing()
+			{"0x71562b71999873db5b286df957af199ec94617f7", "0xf84803843b98a783a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
+			{"0x3a220f351252089d385b29beca14e27f204c296a", "0xf84780830dbc8aa056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
+			{"0x0000000000000000000000000000000000000000", "0xf84c80881bc16d674eca1e95a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
+			{"0x1337beef00000000000000000000000000000000", "0xf84c80883782dace9d921e95a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
+		}
+		expectedHash = "920d630d52432c87f551191217322df4be72ce0dc22286f5d6dba01a99be5b4e"
+	)
+	_ = accounts
+
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	ctx := NewDeferredContext(t.TempDir(), ModeRawBytes)
+	for _, a := range accounts {
+		addr, acc := hexutil.MustDecode(a[0]), hexutil.MustDecode(a[1])
+		ctx.PutAccount(addr, acc)
+	}
+
+	dm.WithDomainsRo(0, func(sd *state.SharedDomains) error {
+		ctx.SetDomains(sd)
+		h, err := ctx.Hash()
+		require.NoError(t, err)
+		assert.Equal(t, expectedHash, hex.EncodeToString(h))
+		return nil
+	})
+
+	dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
+		ctx.SetDomains(sd)
+		err := ctx.Commit()
+		require.NoError(t, err)
+		return nil
+	})
 }

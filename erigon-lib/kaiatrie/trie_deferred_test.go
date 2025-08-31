@@ -16,20 +16,16 @@
 package kaiatrie
 
 import (
-	"context"
 	"encoding/hex"
-	"fmt"
 	"testing"
 
 	"github.com/erigontech/erigon-lib/commitment"
 	"github.com/erigontech/erigon-lib/common/hexutil"
-	"github.com/erigontech/erigon-lib/kv"
-	"github.com/erigontech/erigon-lib/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func Test_DeferredAccountTrie(t *testing.T) {
+func Test_DeferredAccountTrie_ModeErigonV3(t *testing.T) {
 	var (
 		// Test_HexPatriciaHashed_UniqueRepresentation2 data in ErigonV3 account format.
 		// Manually created using accounts.SerialiseV3.
@@ -62,7 +58,7 @@ func Test_DeferredAccountTrie(t *testing.T) {
 
 	{
 		t.Log("Opening trie at block 0")
-		trie := NewDeferredAccountTrie(dm, 0, true) // start from block 0, commit to 0 (genesis)
+		trie := NewDeferredAccountTrie(dm, 0, true, ModeErigonV3) // start from block 0, commit to 0 (genesis)
 		trie.SetTrace(false)
 
 		// Inspect empty state.
@@ -85,7 +81,7 @@ func Test_DeferredAccountTrie(t *testing.T) {
 	}
 	{
 		t.Log("Opening trie at block 1")
-		trie := NewDeferredAccountTrie(dm, 0, false) // start from block 0, commit to 1
+		trie := NewDeferredAccountTrie(dm, 0, false, ModeErigonV3) // start from block 0, commit to 1
 		trie.SetTrace(false)
 
 		// Commit second batch at block 1.
@@ -105,7 +101,7 @@ func Test_DeferredAccountTrie(t *testing.T) {
 	}
 	{
 		t.Log("Opening trie at block 2")
-		trie := NewDeferredAccountTrie(dm, 1, false) // start from block 1, commit to 2
+		trie := NewDeferredAccountTrie(dm, 1, false, ModeErigonV3) // start from block 1, commit to 2
 		trie.SetTrace(false)
 
 		// Inspect block 2.
@@ -114,7 +110,7 @@ func Test_DeferredAccountTrie(t *testing.T) {
 	}
 	{
 		t.Log("Opening trie at block 0")
-		trie := NewDeferredAccountTrie(dm, 0, true) // start from block 0, commit to 0 (genesis)
+		trie := NewDeferredAccountTrie(dm, 0, true, ModeErigonV3) // start from block 0, commit to 0 (genesis)
 		trie.SetTrace(false)
 
 		// Inspect block 0.
@@ -124,22 +120,7 @@ func Test_DeferredAccountTrie(t *testing.T) {
 	}
 }
 
-func TestAbc(t *testing.T) {
-	dm, err := NewTemporaryDomainsManager(t.TempDir())
-	require.NoError(t, err)
-	defer dm.Close()
-
-	dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
-		sd.DomainPut(kv.AccountsDomain, hexutil.MustDecode("0x0000000000000000000000000000000000000003"), nil, hexutil.MustDecode("0x00000000"), nil, 0)
-		sd.DomainPut(kv.StorageDomain, hexutil.MustDecode("0x000000000000000000000000000000000000000356"), nil, hexutil.MustDecode("0x050505"), nil, 0)
-		sd.DomainPut(kv.StorageDomain, hexutil.MustDecode("0x000000000000000000000000000000000000000387"), nil, hexutil.MustDecode("0x060606"), nil, 0)
-		h, e := sd.ComputeCommitment(context.Background(), true, 0, "")
-		fmt.Printf("h: %x, %v\n", h, e)
-		return nil
-	})
-}
-
-func Test_DeferredStorageTrie(t *testing.T) {
+func Test_DeferredStorageTrie_ModeErigonV3(t *testing.T) {
 	var (
 		// Test_HexPatriciaHashed_ProcessWithDozensOfStorageKeys data in ErigonV3 account format.
 		// Manually created using accounts.SerialiseV3.
@@ -210,7 +191,7 @@ func Test_DeferredStorageTrie(t *testing.T) {
 		for _, s := range storage {
 			addrS, addr, key, value := s[0], hexutil.MustDecode(s[0]), hexutil.MustDecode(s[1]), hexutil.MustDecode(s[2])
 			if _, ok := tries[addrS]; !ok {
-				tries[addrS] = NewDeferredStorageTrie(dm, addr, 0, true)
+				tries[addrS] = NewDeferredStorageTrie(dm, addr, 0, true, ModeErigonV3)
 			}
 			trie := tries[addrS]
 			require.NoError(t, trie.Update(key, value))
@@ -224,7 +205,7 @@ func Test_DeferredStorageTrie(t *testing.T) {
 	}
 	{
 		t.Log("Update accounts")
-		trie := NewDeferredAccountTrie(dm, 0, true)
+		trie := NewDeferredAccountTrie(dm, 0, true, ModeErigonV3)
 		for _, acc := range accs {
 			addr, acc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
 			require.NoError(t, trie.Update(addr, acc))

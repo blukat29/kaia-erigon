@@ -249,7 +249,7 @@ func (cell *cell) setFromUpdate(update *Update) {
 		mxTrieStateLoadRate.Inc()
 		hadToLoad.Add(1)
 	}
-	if update.Flags&BalanceUpdate != 0 || update.Flags&NonceUpdate != 0 || update.Flags&CodeUpdate != 0 {
+	if update.Flags&BalanceUpdate != 0 || update.Flags&NonceUpdate != 0 || update.Flags&CodeUpdate != 0 || update.Flags&RawBytesUpdate != 0 {
 		cell.loaded = cell.loaded.addFlag(cellLoadAccount)
 		mxTrieStateLoadRate.Inc()
 		hadToLoad.Add(1)
@@ -281,6 +281,12 @@ func (cell *cell) fillFromUpperCell(upCell *cell, depth, depthIncrement int) {
 			cell.Nonce = upCell.Nonce
 			copy(cell.CodeHash[:], upCell.CodeHash[:])
 			cell.extLen = upCell.extLen
+			if len(upCell.RawBytes) > 0 {
+				cell.RawBytes = make([]byte, len(upCell.RawBytes))
+				copy(cell.RawBytes, upCell.RawBytes)
+			} else {
+				cell.RawBytes = nil
+			}
 			if upCell.extLen > 0 {
 				copy(cell.extension[:], upCell.extension[:upCell.extLen])
 			}
@@ -313,6 +319,12 @@ func (cell *cell) fillFromLowerCell(lowCell *cell, lowDepth int, preExtension []
 		cell.Balance.Set(&lowCell.Balance)
 		cell.Nonce = lowCell.Nonce
 		copy(cell.CodeHash[:], lowCell.CodeHash[:])
+		if len(lowCell.RawBytes) > 0 {
+			cell.RawBytes = make([]byte, len(lowCell.RawBytes))
+			copy(cell.RawBytes, lowCell.RawBytes)
+		} else {
+			cell.RawBytes = nil
+		}
 	}
 	cell.storageAddrLen = lowCell.storageAddrLen
 	if lowCell.storageAddrLen > 0 {
@@ -454,6 +466,13 @@ func readUvarint(data []byte) (uint64, int, error) {
 }
 
 func (cell *cell) accountForHashing(buffer []byte, storageRootHash [length.Hash]byte) int {
+	if len(cell.RawBytes) > 0 {
+		if len(buffer) < len(cell.RawBytes) {
+			buffer = make([]byte, len(cell.RawBytes))
+		}
+		copy(buffer[:], cell.RawBytes[:])
+		return len(cell.RawBytes)
+	}
 	balanceBytes := 0
 	if !cell.Balance.LtUint64(128) {
 		balanceBytes = cell.Balance.ByteLen()
@@ -1107,6 +1126,9 @@ func (c *cell) String() string {
 	}
 	if c.storageAddrLen > 0 {
 		s += fmt.Sprintf("storageAddr=%x, ", c.storageAddr)
+	}
+	if len(c.RawBytes) > 0 {
+		s += fmt.Sprintf("rawBytes(len=%d)=%x, ", len(c.RawBytes), c.RawBytes)
 	}
 
 	s += ")"

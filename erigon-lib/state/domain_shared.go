@@ -890,6 +890,22 @@ func (sd *SharedDomains) DomainPut(domain kv.Domain, k1, k2 []byte, val, prevVal
 	}
 }
 
+func (sd *SharedDomains) DomainPutRaw(domain kv.Domain, k1, val []byte) error {
+	if val == nil {
+		return fmt.Errorf("DomainPut: %s, trying to put nil value. not allowed", domain)
+	}
+	prevVal, prevStep, err := sd.GetLatest(domain, k1)
+	if err != nil {
+		return err
+	}
+
+	if bytes.Equal(prevVal, val) {
+		return nil
+	}
+	sd.put(domain, toStringZeroCopy(k1), val)
+	return sd.domainWriters[domain].PutWithPrev(k1, nil, val, prevVal, prevStep)
+}
+
 // DomainDel
 // Optimizations:
 //   - user can prvide `prevVal != nil` - then it will not read prev value from storage

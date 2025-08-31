@@ -37,10 +37,20 @@ var (
 	errNotLatest = errors.New("cannot operate on non-latest commitment state")
 )
 
+type AccountMode uint8
+
+const (
+	ModeErigonV3 AccountMode = 0
+	ModeRawBytes AccountMode = 1
+)
+
 // DeferredContext is an implmentation of PatriciaContext that allows a deferred involvement of the SharedDomains
 // to minimize the usage of the SharedDomains, and database transactions within. This allows concurrent access
 // to the state database, which is required in Kaia statedb.
 type DeferredContext struct {
+	// Account decoding mode
+	accountMode AccountMode
+
 	// Unhashed and uncommitted changes.
 	pendingUpdates  *commitment.Updates
 	trie            *commitment.HexPatriciaHashed
@@ -69,8 +79,9 @@ type pendingBranch struct {
 	prevStep uint64
 }
 
-func NewDeferredContext(tmpdir string) *DeferredContext {
+func NewDeferredContext(tmpdir string, accountMode AccountMode) *DeferredContext {
 	ctx := &DeferredContext{
+		accountMode:       accountMode,
 		pendingUpdates:    commitment.NewUpdates(commitment.ModeDirect, tmpdir, commitment.KeyToHexNibbleHash),
 		pendingAccounts:   make(map[string][]byte),
 		pendingStorages:   make(map[string][]byte),
@@ -134,28 +145,40 @@ func (c *DeferredContext) Account(plainKey []byte) (*commitment.Update, error) {
 		return nil, err
 	}
 
-	u := &commitment.Update{CodeHash: commitment.EmptyCodeHashArray} // default to empty code hash
-	if len(encAccount) == 0 {
-		u.Flags = commitment.DeleteUpdate
+	if c.accountMode == ModeRawBytes {
+		u := &commitment.Update{CodeHash: commitment.EmptyCodeHashArray} // default to empty code hash
+		u.Flags = commitment.RawBytesUpdate
+		u.RawBytes = make([]byte, len(encAccount))
+		copy(u.RawBytes, encAccount)
 		return u, nil
 	}
 
-	acc := new(accounts.Account)
-	if err := accounts.DeserialiseV3(acc, encAccount); err != nil {
-		return nil, err
+	if c.accountMode == ModeErigonV3 {
+		u := &commitment.Update{CodeHash: commitment.EmptyCodeHashArray} // default to empty code hash
+		if len(encAccount) == 0 {
+			u.Flags = commitment.DeleteUpdate
+			return u, nil
+		}
+
+		acc := new(accounts.Account)
+		if err := accounts.DeserialiseV3(acc, encAccount); err != nil {
+			return nil, err
+		}
+
+		u.Flags |= commitment.NonceUpdate
+		u.Nonce = acc.Nonce
+
+		u.Flags |= commitment.BalanceUpdate
+		u.Balance.Set(&acc.Balance)
+
+		if ch := acc.CodeHash.Bytes(); len(ch) > 0 { // if code hash is not empty
+			u.Flags |= commitment.CodeUpdate
+			copy(u.CodeHash[:], ch)
+		}
+		return u, nil
 	}
 
-	u.Flags |= commitment.NonceUpdate
-	u.Nonce = acc.Nonce
-
-	u.Flags |= commitment.BalanceUpdate
-	u.Balance.Set(&acc.Balance)
-
-	if ch := acc.CodeHash.Bytes(); len(ch) > 0 { // if code hash is not empty
-		u.Flags |= commitment.CodeUpdate
-		copy(u.CodeHash[:], ch)
-	}
-	return u, nil
+	return nil, fmt.Errorf("invalid account mode: %d", c.accountMode)
 }
 
 func (c *DeferredContext) PutStorage(plainKey []byte, encStorage []byte) {
@@ -305,7 +328,7 @@ func (c *DeferredContext) Commit() error {
 
 	// Commit pending accounts.
 	for addr, acc := range c.pendingAccounts {
-		if err := c.sd.DomainPut(kv.AccountsDomain, []byte(addr), nil, acc, nil, 0); err != nil {
+		if err := c.sd.DomainPutRaw(kv.AccountsDomain, []byte(addr), acc); err != nil {
 			return err
 		}
 	}
@@ -314,7 +337,7 @@ func (c *DeferredContext) Commit() error {
 
 	// Commit pending storages.
 	for plainKey, encStorage := range c.pendingStorages {
-		if err := c.sd.DomainPut(kv.StorageDomain, []byte(plainKey), nil, encStorage, nil, 0); err != nil {
+		if err := c.sd.DomainPutRaw(kv.StorageDomain, []byte(plainKey), encStorage); err != nil {
 			return err
 		}
 	}
@@ -356,5 +379,5 @@ func customGet(sd *state.SharedDomains, key []byte) ([]byte, error) {
 }
 
 func customPut(sd *state.SharedDomains, key []byte, data []byte) error {
-	return sd.DomainPut(kv.ReceiptDomain, key, nil, data, nil, 0)
+	return sd.DomainPutRaw(kv.ReceiptDomain, key, data)
 }
