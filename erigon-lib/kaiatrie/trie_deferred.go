@@ -129,7 +129,7 @@ func NewDeferredStorageTrie(dm *DomainsManager, addr []byte, blockNum uint64, ge
 		if acc == nil {
 			// Add a surrogate account so HPH can calculate the storage root hash for this account even if
 			// the account does not exist just yet. Usually happens in contract deployment transaction's constructor().
-			ctx.PutAccount(addr, emptyEncAccountE3)
+			ctx.PutAccount(addr, surrogateAccount(accountMode))
 		}
 		return nil
 	})
@@ -141,6 +141,19 @@ func NewDeferredStorageTrie(dm *DomainsManager, addr []byte, blockNum uint64, ge
 		roNum: roNum,
 		rwNum: rwNum,
 	}
+}
+
+func surrogateAccount(accountMode AccountMode) []byte {
+	switch accountMode {
+	case ModeErigonV3:
+		// A valid ErigonV3 (SerialiseV3) account.
+		return emptyEncAccountE3
+	case ModeRawBytes:
+		// Actually it doesn't matter in ModeRawBytes because this account data is never decoded and instead treated as an opaque value
+		// in HexPatriciaHashed, Updates, and DeferredContext. Therefore it's safe to use emptyEncAccountE3 for ModeRawBytes.
+		return emptyEncAccountE3
+	}
+	return nil
 }
 
 func (t *DeferredStorageTrie) SetTrace(trace bool) {
