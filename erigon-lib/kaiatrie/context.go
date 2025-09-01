@@ -31,7 +31,7 @@ import (
 var (
 	_ commitment.PatriciaContext = (*DeferredContext)(nil)
 
-	keyHphState = []byte("hphstate") // hphstate => Latest hph state and respective blockNum, txNum
+	keyHphState = []byte("hphstate") // "hphstate" => Latest {hphState, blockNum, txNum}
 
 	errNoDomains = errors.New("cannot operate without domains")
 	errNotLatest = errors.New("cannot operate on non-latest commitment state")
