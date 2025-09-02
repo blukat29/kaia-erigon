@@ -18,6 +18,7 @@ package kaiatrie
 import (
 	"fmt"
 
+	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/state"
 )
 
@@ -106,15 +107,19 @@ func (t *DeferredAccountTrie) Commit() ([]byte, error) {
 }
 
 type DeferredStorageTrie struct {
-	dm   *DomainsManager
-	ctx  *DeferredContext
-	addr []byte
+	dm          *DomainsManager
+	ctx         *DeferredContext
+	addr        common.Address
+	initialRoot common.Hash
 
 	roNum uint64
 	rwNum uint64
+
+	updated bool // true if the storage trie has ever been updated since construction.
 }
 
-func NewDeferredStorageTrie(dm *DomainsManager, addr []byte, blockNum uint64, genesis bool, accountMode AccountMode) *DeferredStorageTrie {
+func NewDeferredStorageTrie(dm *DomainsManager, addrB, storageRoot []byte, blockNum uint64, genesis bool, accountMode AccountMode) *DeferredStorageTrie {
+	addr := common.BytesToAddress(addrB)
 	ctx := NewDeferredContext(dm.dirs.Tmp, accountMode)
 
 	var roNum, rwNum uint64
@@ -128,21 +133,22 @@ func NewDeferredStorageTrie(dm *DomainsManager, addr []byte, blockNum uint64, ge
 
 	dm.WithDomainsRo(roNum, func(sd *state.SharedDomains) error {
 		ctx.SetDomains(sd)
-		acc, _ := ctx.AccountRaw(addr)
+		acc, _ := ctx.AccountRaw(addr.Bytes())
 		if acc == nil {
 			// Add a surrogate account so HPH can calculate the storage root hash for this account even if
 			// the account does not exist just yet. Usually happens in contract deployment transaction's constructor().
-			ctx.PutAccount(addr, surrogateAccount(accountMode))
+			ctx.PutAccount(addr.Bytes(), surrogateAccount(accountMode))
 		}
 		return nil
 	})
 
 	return &DeferredStorageTrie{
-		dm:    dm,
-		ctx:   ctx,
-		addr:  addr,
-		roNum: roNum,
-		rwNum: rwNum,
+		dm:          dm,
+		ctx:         ctx,
+		addr:        addr,
+		initialRoot: common.BytesToHash(storageRoot),
+		roNum:       roNum,
+		rwNum:       rwNum,
 	}
 }
 
@@ -186,6 +192,8 @@ func (t *DeferredStorageTrie) Delete(key []byte) error {
 }
 
 func (t *DeferredStorageTrie) Hash() ([]byte, error) {
+	t.updated = t.updated || (t.ctx.pendingUpdates.Size() > 0) // If *ever* been updated.
+
 	// Compute state root hash. Storage root hashes are calculated in the process.
 	err := t.dm.WithDomainsRo(t.roNum, func(sd *state.SharedDomains) error {
 		t.ctx.SetDomains(sd)
@@ -197,9 +205,16 @@ func (t *DeferredStorageTrie) Hash() ([]byte, error) {
 	}
 
 	// Harvest the storage root hash, which is byproduct of the state root hash calculation.
-	storageRoot := t.ctx.trie.LastStorageRootHash(t.addr)
-	if len(storageRoot) == 0 {
-		return nil, fmt.Errorf("%w: addr=%x", errNoStorageRoot, t.addr)
+	storageRoot := t.ctx.trie.LastStorageRootHash(t.addr.Bytes())
+	if len(storageRoot) == 0 { // trie didn't calculate the storage root hash.
+		if t.updated {
+			// If there was an update but the storage root hash is not calculated, something is wrong.
+			return nil, fmt.Errorf("%w: addr=%x", errNoStorageRoot, t.addr)
+		} else {
+			// If the storage trie has never been updated, it is normal that storage root hash is not calculated.
+			// Return the initial storage root hash.
+			return t.initialRoot.Bytes(), nil
+		}
 	}
 	return storageRoot, nil
 }

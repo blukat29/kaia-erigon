@@ -200,7 +200,7 @@ func Test_DeferredStorageTrie_ModeErigonV3(t *testing.T) {
 		for _, s := range storage {
 			addrS, addr, key, value := s[0], hexutil.MustDecode(s[0]), hexutil.MustDecode(s[1]), hexutil.MustDecode(s[2])
 			if _, ok := tries[addrS]; !ok {
-				tries[addrS] = NewDeferredStorageTrie(dm, addr, 0, true, ModeErigonV3)
+				tries[addrS] = NewDeferredStorageTrie(dm, addr, nil, 0, true, ModeErigonV3)
 			}
 			trie := tries[addrS]
 			require.NoError(t, trie.Update(key, value))
@@ -222,7 +222,7 @@ func Test_DeferredStorageTrie_ModeErigonV3(t *testing.T) {
 		// Because ErigonV3 account serialization doesn't include storage root, we have to feed it to HPH.
 		// It won't happen if we use RawBytes account serialization.
 		for _, s := range storage {
-			addr, key, value := hexutil.MustDecode(s[0]), hexutil.MustDecode(s[1]), hexutil.MustDecode(s[2])
+			addr, key, value := common.HexToAddress(s[0]), hexutil.MustDecode(s[1]), hexutil.MustDecode(s[2])
 			trie.ctx.PutStorage(storageKey(addr, key), value)
 		}
 		checkTrieHash(t, trie, expectedStateRoot)
@@ -508,7 +508,7 @@ func Test_DeferredStorageTrie_ModeRawBytes(t *testing.T) {
 
 	{
 		t.Log("Commit storage trie")
-		trie := NewDeferredStorageTrie(dm, addr, 0, true, ModeRawBytes)
+		trie := NewDeferredStorageTrie(dm, addr, nil, 0, true, ModeRawBytes)
 		for _, s := range storage {
 			key, value := hexutil.MustDecode(s[0]), hexutil.MustDecode(s[1])
 			require.NoError(t, trie.Update(key, value))
@@ -523,7 +523,7 @@ func Test_DeferredStorageTrie_ModeRawBytes(t *testing.T) {
 	}
 	{
 		t.Log("Inspect storage trie")
-		trie := NewDeferredStorageTrie(dm, addr, 0, false, ModeRawBytes)
+		trie := NewDeferredStorageTrie(dm, addr, nil, 0, false, ModeRawBytes)
 		checkTrieGet(t, trie, storage)
 	}
 	{

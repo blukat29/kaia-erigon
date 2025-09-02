@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/common/hexutil"
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/erigontech/erigon-lib/state"
@@ -75,15 +76,16 @@ func (t *SingleTxAccountTrie) Commit() ([]byte, error) {
 
 type SingleTxStorageTrie struct {
 	sd   *state.SharedDomains
-	addr []byte
+	addr common.Address
 }
 
-func NewSingleTxStorageTrie(sd *state.SharedDomains, addr []byte) *SingleTxStorageTrie {
-	encAccount, _ := sd.GetCommitmentContext().AccountRaw(addr)
+func NewSingleTxStorageTrie(sd *state.SharedDomains, addrB []byte) *SingleTxStorageTrie {
+	addr := common.BytesToAddress(addrB)
+	encAccount, _ := sd.GetCommitmentContext().AccountRaw(addr.Bytes())
 	if encAccount == nil {
 		// Add a surrogate account so HPH can calculate the storage root hash for this account even if
 		// the account does not exist just yet. Usually happens in contract deployment transaction's constructor().
-		sd.DomainPut(kv.AccountsDomain, addr, nil, emptyEncAccountE3, nil, 0)
+		sd.DomainPut(kv.AccountsDomain, addr.Bytes(), nil, emptyEncAccountE3, nil, 0)
 	}
 	return &SingleTxStorageTrie{sd: sd, addr: addr}
 }
@@ -112,7 +114,7 @@ func (t *SingleTxStorageTrie) Hash() ([]byte, error) {
 	// Note that LastStorageRootHash is only filled if there was a storage update.
 	// In DeferredTrie, we are given the previous storage root hash via the OpenTrie argument, so we can return it.
 	// But SingleTxStorageTrie doesn't have that. That is okay because SingleTxStorageTrie is only used for testing.
-	storageRoot := t.sd.GetCommitmentContext().Trie().LastStorageRootHash(t.addr)
+	storageRoot := t.sd.GetCommitmentContext().Trie().LastStorageRootHash(t.addr.Bytes())
 	if len(storageRoot) == 0 {
 		return nil, fmt.Errorf("%w: addr=%x", errNoStorageRoot, t.addr)
 	}
@@ -134,6 +136,6 @@ func (t *SingleTxStorageTrie) Commit() ([]byte, error) {
 	return h, nil
 }
 
-func storageKey(addr, key []byte) []byte {
-	return append(addr, key...)
+func storageKey(addr common.Address, key []byte) []byte {
+	return append(addr.Bytes(), key...)
 }
