@@ -89,8 +89,9 @@ func NewTemporaryDomainsManager(dir string) (*DomainsManager, error) {
 	return newDomainsManager(dirs, logger, db, runtime.GOMAXPROCS(0))
 }
 
-func NewDomainsManager(dir string, logger log.Logger) (*DomainsManager, error) {
+func NewDomainsManager(dir string, logger_ foreignLogger) (*DomainsManager, error) {
 	dirs := datadir.New(dir)
+	logger := loggerFromForeign(logger_)
 
 	// node.go:OpenDatabase()
 	// Follow the Erigon default settings in general.
