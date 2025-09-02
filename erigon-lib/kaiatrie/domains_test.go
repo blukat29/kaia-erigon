@@ -21,6 +21,7 @@ import (
 
 	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/kv"
+	"github.com/erigontech/erigon-lib/log/v3"
 	"github.com/erigontech/erigon-lib/state"
 	"github.com/erigontech/erigon-lib/types/accounts"
 	"github.com/holiman/uint256"
@@ -48,6 +49,35 @@ func Test_DomainsManager_BlockNums(t *testing.T) {
 	assert.NoError(t, dm.WithDomainsRw(2, noop))
 	// Permitted to commit the block right after the last block.
 	assert.NoError(t, dm.WithDomainsRw(3, noop))
+}
+
+func Test_DomainsManager_Reopen(t *testing.T) {
+	var (
+		addr   = common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes()
+		acc    = accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(90)})
+		dir    = t.TempDir()
+		logger = log.Root()
+	)
+
+	// Write and close.
+	dm, err := NewDomainsManager(dir, logger)
+	require.NoError(t, err)
+	dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
+		sd.DomainPut(kv.AccountsDomain, addr, nil, acc, nil, 0)
+		return nil
+	})
+	dm.Close()
+
+	// Reopen and read.
+	dm, err = NewDomainsManager(dir, logger)
+	require.NoError(t, err)
+	dm.WithDomainsRo(0, func(sd *state.SharedDomains) error {
+		actualAcc, err := sd.GetCommitmentContext().AccountRaw(addr)
+		assert.NoError(t, err)
+		assert.Equal(t, acc, actualAcc)
+		return nil
+	})
+	dm.Close()
 }
 
 func Test_DomainsManager_Accounts(t *testing.T) {

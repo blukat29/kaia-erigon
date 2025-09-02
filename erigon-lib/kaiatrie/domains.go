@@ -23,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/c2h5oh/datasize"
 	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/common/datadir"
 	"github.com/erigontech/erigon-lib/config3"
@@ -31,6 +32,7 @@ import (
 	"github.com/erigontech/erigon-lib/kv/rawdbv3"
 	"github.com/erigontech/erigon-lib/log/v3"
 	"github.com/erigontech/erigon-lib/state"
+	"golang.org/x/sync/semaphore"
 )
 
 var (
@@ -78,8 +80,31 @@ func NewTemporaryDomainsManager(dir string) (*DomainsManager, error) {
 
 	// kv_mdbx_temporary.go
 	db, err := mdbx.New(kv.ChainDB, logger).
-		InMem(dirs.Chaindata). // spill directory, not the permanent one.
+		InMem(dirs.Chaindata). // dirs is only for the spill. Not persistent.
 		Open(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
+	return newDomainsManager(dirs, logger, db, runtime.GOMAXPROCS(0))
+}
+
+func NewDomainsManager(dir string, logger log.Logger) (*DomainsManager, error) {
+	dirs := datadir.New(dir)
+
+	// node.go:OpenDatabase()
+	// Follow the Erigon default settings in general.
+	roTxsLimiter := semaphore.NewWeighted(32) // same as OpenDatabase()
+	opts := mdbx.New(kv.ChainDB, logger).
+		Path(dir).
+		GrowthStep(16 * datasize.MB).      // same as OpenDatabase()
+		PageSize(4 * datasize.KB).         // DbPageSizeFlag default
+		MapSize(1 * datasize.TB).          // DbSizeLimitFlag default
+		DBVerbosity(kv.DBVerbosityLvl(2)). // WARN
+		RoTxsLimiter(roTxsLimiter).
+		Readonly(false).
+		Exclusive(true)
+	db, err := opts.Open(context.Background())
 	if err != nil {
 		return nil, err
 	}
