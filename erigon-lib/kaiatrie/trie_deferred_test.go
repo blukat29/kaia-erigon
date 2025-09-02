@@ -324,6 +324,7 @@ func Test_DeferredAccountTrie_ModeRawBytes_Commit(t *testing.T) {
 		checkTrieHash(t, trie, hex.EncodeToString(commitment.EmptyRootHash))
 		require.NoError(t, trie.Update(hexutil.MustDecode(accounts[0][0]), hexutil.MustDecode(accounts[0][1])))
 		checkTrieCommit(t, trie, expectedHashes[0])
+		checkRootHash(t, dm, expectedHashes[0], 0)
 	}
 	{
 		t.Log("Commit block #1")
@@ -331,6 +332,8 @@ func Test_DeferredAccountTrie_ModeRawBytes_Commit(t *testing.T) {
 		checkTrieHash(t, trie, expectedHashes[0])
 		require.NoError(t, trie.Update(hexutil.MustDecode(accounts[1][0]), hexutil.MustDecode(accounts[1][1])))
 		checkTrieCommit(t, trie, expectedHashes[1])
+		checkRootHash(t, dm, expectedHashes[0], 0)
+		checkRootHash(t, dm, expectedHashes[1], 1)
 	}
 	{
 		t.Log("Commit block #2")
@@ -339,6 +342,9 @@ func Test_DeferredAccountTrie_ModeRawBytes_Commit(t *testing.T) {
 		require.NoError(t, trie.Update(hexutil.MustDecode(accounts[2][0]), hexutil.MustDecode(accounts[2][1])))
 		checkTrieCommit(t, trie, expectedHashes[2])
 		checkTrieGet(t, trie, accounts)
+		checkRootHash(t, dm, expectedHashes[0], 0)
+		checkRootHash(t, dm, expectedHashes[1], 1)
+		checkRootHash(t, dm, expectedHashes[2], 2)
 	}
 }
 
@@ -479,11 +485,11 @@ func Test_DeferredStorageTrie_ModeRawBytes(t *testing.T) {
 		// Kairos block #505584, contract 0x9fdd7a341308e969527bd6c928068edee8399807
 		addr    = common.HexToAddress("0x9fdd7a341308e969527bd6c928068edee8399807").Bytes()
 		storage = [][2]string{
-			{"0x0000000000000000000000000000000000000000000000000000000000000003", mustDecodeRLP(t, "0xa0424820546f6b656e000000000000000000000000000000000000000000000010")},
-			{"0x0000000000000000000000000000000000000000000000000000000000000004", mustDecodeRLP(t, "0xa04248540000000000000000000000000000000000000000000000000000000006")},
-			{"0x0000000000000000000000000000000000000000000000000000000000000005", mustDecodeRLP(t, "0x95efef9fe22a5e1ae68baea7069dcb1ac607ed78cf12")},
-			{"0x0000000000000000000000000000000000000000000000000000000000000002", mustDecodeRLP(t, "0x8c033b2e3c9fd0803ce8000000")},
-			{"0x3eaa2d76dda4c78c477b7231cb487c2b8fa646a998125bc96085f54b529e14a6", mustDecodeRLP(t, "0x8c033b2e3c9fd0803ce8000000")},
+			{"0x0000000000000000000000000000000000000000000000000000000000000003", "0x424820546f6b656e000000000000000000000000000000000000000000000010"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000004", "0x4248540000000000000000000000000000000000000000000000000000000006"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000005", "0xefef9fe22a5e1ae68baea7069dcb1ac607ed78cf12"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000002", "0x033b2e3c9fd0803ce8000000"},
+			{"0x3eaa2d76dda4c78c477b7231cb487c2b8fa646a998125bc96085f54b529e14a6", "0x033b2e3c9fd0803ce8000000"},
 		}
 
 		// kaia.getAccount('0x9fdd7a341308e969527bd6c928068edee8399807', 505584)

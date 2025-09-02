@@ -97,7 +97,10 @@ func (t *DeferredAccountTrie) Commit() ([]byte, error) {
 	}
 	err = t.dm.WithDomainsRw(t.rwNum, func(sd *state.SharedDomains) error {
 		t.ctx.SetDomains(sd)
-		return t.ctx.Commit()
+		if err := t.ctx.Commit(); err != nil {
+			return err
+		}
+		return WriteBlockNumByRoot(sd, h, t.rwNum)
 	})
 	return h, err
 }

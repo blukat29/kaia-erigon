@@ -152,35 +152,6 @@ func Test_DomainsManager_RoConcurrent(t *testing.T) {
 	}))
 }
 
-func Test_DomainsManager_RootHash(t *testing.T) {
-	var (
-		hash1 = common.HexToHash("0x1111111111111111111111111111111111111111")
-		hash2 = common.HexToHash("0x2222222222222222222222222222222222222222")
-	)
-
-	dm, err := NewTemporaryDomainsManager(t.TempDir())
-	require.NoError(t, err)
-	defer dm.Close()
-
-	require.NoError(t, dm.WriteBlockNumByRoot(hash1.Bytes(), 1))
-	require.NoError(t, dm.WriteBlockNumByRoot(hash2.Bytes(), 2))
-
-	blockNum, ok, err := dm.ReadBlockNumByRoot(hash1.Bytes())
-	assert.NoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, uint64(1), blockNum)
-
-	blockNum, ok, err = dm.ReadBlockNumByRoot(hash2.Bytes())
-	assert.NoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, uint64(2), blockNum)
-
-	blockNum, ok, err = dm.ReadBlockNumByRoot(common.HexToHash("0x3333333333333333333333333333333333333333").Bytes())
-	assert.NoError(t, err)
-	assert.False(t, ok)
-	assert.Equal(t, uint64(0), blockNum)
-}
-
 func Benchmark_DomainsRo(b *testing.B) {
 	dm, err := NewTemporaryDomainsManager(b.TempDir())
 	require.NoError(b, err)

@@ -58,6 +58,14 @@ func checkTrieCommit(t *testing.T, trie Trie, expectedHash string) {
 	assert.Equal(t, expectedHash, hex.EncodeToString(hash))
 }
 
+func checkRootHash(t *testing.T, dm *DomainsManager, hash string, expectedBlockNum uint64) {
+	h, _ := hex.DecodeString(hash)
+	blockNum, ok, err := ReadBlockNumByRoot(dm, h)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, expectedBlockNum, blockNum)
+}
+
 func Test_SingleTxAccountTrie(t *testing.T) {
 	var (
 		// Test_HexPatriciaHashed_UniqueRepresentation2 data in ErigonV3 account format.

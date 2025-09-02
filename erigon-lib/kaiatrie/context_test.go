@@ -48,6 +48,39 @@ func Test_Context_CustomSchema(t *testing.T) {
 	})
 }
 
+func Test_DomainsManager_RootHash(t *testing.T) {
+	var (
+		hash1 = common.HexToHash("0x1111111111111111111111111111111111111111")
+		hash2 = common.HexToHash("0x2222222222222222222222222222222222222222")
+	)
+
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	require.NoError(t, dm.WithDomainsRw(1, func(sd *state.SharedDomains) error {
+		return WriteBlockNumByRoot(sd, hash1.Bytes(), 1)
+	}))
+	require.NoError(t, dm.WithDomainsRw(2, func(sd *state.SharedDomains) error {
+		return WriteBlockNumByRoot(sd, hash2.Bytes(), 2)
+	}))
+
+	blockNum, ok, err := ReadBlockNumByRoot(dm, hash1.Bytes())
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, uint64(1), blockNum)
+
+	blockNum, ok, err = ReadBlockNumByRoot(dm, hash2.Bytes())
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, uint64(2), blockNum)
+
+	blockNum, ok, err = ReadBlockNumByRoot(dm, common.HexToHash("0x3333333333333333333333333333333333333333").Bytes())
+	assert.NoError(t, err)
+	assert.False(t, ok)
+	assert.Equal(t, uint64(0), blockNum)
+}
+
 // Test the Update type return values.
 func Test_Context_Get(t *testing.T) {
 	var (

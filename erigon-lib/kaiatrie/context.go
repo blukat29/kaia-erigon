@@ -17,6 +17,7 @@ package kaiatrie
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -381,4 +382,29 @@ func customGet(sd *state.SharedDomains, key []byte) ([]byte, error) {
 
 func customPut(sd *state.SharedDomains, key []byte, data []byte) error {
 	return sd.DomainPutOrDelRaw(kv.ReceiptDomain, key, data)
+}
+
+func ReadBlockNumByRoot(dm *DomainsManager, rootHash []byte) (uint64, bool, error) {
+	blockNum := uint64(0)
+	ok := false
+
+	err := dm.withDomainsRo_callerThread(0, func(sd *state.SharedDomains) error {
+		data, err := customGet(sd, rootKey(rootHash))
+		if err != nil {
+			return err
+		} else if len(data) < 8 {
+			return nil // not error, just not found. Return num=0, ok=false.
+		} else {
+			blockNum = binary.BigEndian.Uint64(data)
+			ok = true
+		}
+		return nil
+	})
+	return blockNum, ok, err
+}
+
+func WriteBlockNumByRoot(sd *state.SharedDomains, rootHash []byte, blockNum uint64) error {
+	blockNumB := make([]byte, 8)
+	binary.BigEndian.PutUint64(blockNumB, blockNum)
+	return customPut(sd, rootKey(rootHash), blockNumB)
 }

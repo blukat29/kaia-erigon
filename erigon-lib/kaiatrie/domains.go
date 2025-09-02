@@ -17,7 +17,6 @@ package kaiatrie
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"runtime"
@@ -331,34 +330,6 @@ func writeTxNums(tx kv.RwTx, blockNum uint64) error {
 		return rawdbv3.TxNums.Append(tx, blockNum, blockNum+1)
 	}
 	return nil
-}
-
-// We want every rootHash => blockNum mapping to be accessible as of any block, because we query this info
-// before knowing the block number. To do so, we store the mapping as of block 0.
-func (dm *DomainsManager) ReadBlockNumByRoot(rootHash []byte) (uint64, bool, error) {
-	blockNum := uint64(0)
-	ok := false
-	err := dm.WithDomainsRo(0, func(sd *state.SharedDomains) error {
-		blockNumB, err := customGet(sd, rootKey(rootHash))
-		if err != nil {
-			return err
-		} else if len(blockNumB) < 8 {
-			return nil // not error, just not found. Return num=0, ok=false.
-		}
-		blockNum = binary.BigEndian.Uint64(blockNumB)
-		ok = true
-		return nil
-	})
-	return blockNum, ok, err
-}
-
-func (dm *DomainsManager) WriteBlockNumByRoot(rootHash []byte, blockNum uint64) error {
-	err := dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
-		blockNumB := make([]byte, 8)
-		binary.BigEndian.PutUint64(blockNumB, blockNum)
-		return customPut(sd, rootKey(rootHash), blockNumB)
-	})
-	return err
 }
 
 func rootKey(rootHash []byte) []byte {
