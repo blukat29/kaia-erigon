@@ -20,7 +20,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/common/datadir"
@@ -52,6 +54,12 @@ func newTxWithAggTx(tx kv.Tx, agg *state.AggregatorRoTx) *txWithAggTx {
 
 func (tx *txWithAggTx) AggTx() any { return tx.aggTx }
 
+type roTask struct {
+	blockNum uint64
+	fn       DomainsUserFn
+	retCh    chan error
+}
+
 type DomainsManager struct {
 	mu     sync.Mutex
 	dirs   datadir.Dirs
@@ -59,6 +67,10 @@ type DomainsManager struct {
 
 	db  kv.RwDB
 	agg *state.Aggregator
+
+	wg       sync.WaitGroup
+	workers  []*roWorker
+	roTaskCh chan *roTask
 }
 
 func NewTemporaryDomainsManager(dir string) (*DomainsManager, error) {
@@ -73,10 +85,10 @@ func NewTemporaryDomainsManager(dir string) (*DomainsManager, error) {
 		return nil, err
 	}
 
-	return newDomainsManager(dirs, logger, db)
+	return newDomainsManager(dirs, logger, db, runtime.GOMAXPROCS(0))
 }
 
-func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB) (*DomainsManager, error) {
+func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, numWorkers int) (*DomainsManager, error) {
 	// eth/backend.go:setUpBlockReader
 	agg, err := state.NewAggregator2(context.Background(), dirs, config3.DefaultStepSize, db, logger)
 	if err != nil {
@@ -85,12 +97,24 @@ func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB) (*Domai
 	if err := agg.OpenFolder(); err != nil {
 		return nil, err
 	}
-	return &DomainsManager{
-		dirs:   dirs,
-		logger: logger,
-		db:     db,
-		agg:    agg,
-	}, nil
+
+	dm := &DomainsManager{
+		dirs:     dirs,
+		logger:   logger,
+		db:       db,
+		agg:      agg,
+		roTaskCh: make(chan *roTask, numWorkers),
+	}
+	for i := 0; i < numWorkers; i++ {
+		w := &roWorker{
+			dm:     dm,
+			taskCh: dm.roTaskCh,
+		}
+		dm.wg.Add(1)
+		dm.workers = append(dm.workers, w)
+		go w.loop()
+	}
+	return dm, nil
 }
 
 func (dm *DomainsManager) Close() {
@@ -98,6 +122,8 @@ func (dm *DomainsManager) Close() {
 	defer dm.mu.Unlock()
 
 	// Order matters here.
+	close(dm.roTaskCh)
+	dm.wg.Wait()
 	if dm.agg != nil {
 		dm.agg.Close()
 	}
@@ -107,6 +133,10 @@ func (dm *DomainsManager) Close() {
 }
 
 func (dm *DomainsManager) WithDomainsRo(blockNum uint64, fn DomainsUserFn) error {
+	return dm.withDomainsRo_workerThread(blockNum, fn)
+}
+
+func (dm *DomainsManager) withDomainsRo_callerThread(blockNum uint64, fn DomainsUserFn) error {
 	ctx := context.Background()
 
 	tx, err := dm.db.BeginRo(ctx)
@@ -131,6 +161,90 @@ func (dm *DomainsManager) WithDomainsRo(blockNum uint64, fn DomainsUserFn) error
 		return err
 	}
 	return nil
+}
+
+func (dm *DomainsManager) withDomainsRo_workerThread(blockNum uint64, fn DomainsUserFn) error {
+	task := &roTask{
+		blockNum: blockNum,
+		fn:       fn,
+		retCh:    make(chan error),
+	}
+	dm.roTaskCh <- task
+	return <-task.retCh
+}
+
+type roWorker struct {
+	dm     *DomainsManager
+	taskCh chan *roTask
+
+	forceReopen atomic.Int32
+
+	// Will be reused as long as the requested blockNum is the same. Reopened otherwise.
+	blockNum uint64
+	tx       kv.Tx
+	aggTx    *state.AggregatorRoTx
+	sd       *state.SharedDomains
+}
+
+func (w *roWorker) getSd(num uint64) (*state.SharedDomains, error) {
+	// Last used sd is still valid.
+	if w.sd != nil && w.blockNum == num && w.forceReopen.Load() == 0 {
+		return w.sd, nil
+	}
+	w.forceReopen.Store(0)
+
+	// Otherwise, we need to create a new sd.
+	if w.sd != nil {
+		w.sd.Close()
+		w.aggTx.Close()
+		w.tx.Rollback()
+	}
+
+	tx, err := w.dm.db.BeginRo(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	aggTx := w.dm.agg.BeginFilesRo()
+	sd, err := state.NewSharedDomains(newTxWithAggTx(tx, aggTx), w.dm.logger)
+	if err != nil {
+		aggTx.Close()
+		tx.Rollback()
+		return nil, err
+	}
+	if err := setTxNumsForRead(sd, num); err != nil {
+		sd.Close()
+		aggTx.Close()
+		tx.Rollback()
+		return nil, err
+	}
+
+	w.sd = sd
+	w.aggTx = aggTx
+	w.tx = tx
+	w.blockNum = num
+	return w.sd, nil
+}
+
+func (w *roWorker) close() {
+	if w.sd != nil {
+		w.sd.Close()
+		w.aggTx.Close()
+		w.tx.Rollback()
+	}
+}
+
+func (w *roWorker) loop() {
+	defer w.dm.wg.Done()
+	defer w.close()
+
+	for task := range w.taskCh {
+		sd, err := w.getSd(task.blockNum)
+		if err != nil {
+			task.retCh <- err
+		} else {
+			task.retCh <- task.fn(sd)
+		}
+	}
 }
 
 func (dm *DomainsManager) WithDomainsRw(blockNum uint64, fn DomainsUserFn) error {
@@ -168,6 +282,9 @@ func (dm *DomainsManager) WithDomainsRw(blockNum uint64, fn DomainsUserFn) error
 	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+	for _, w := range dm.workers {
+		w.forceReopen.Store(1) // Signal ro workers to reopen their tx after db commit.
 	}
 	return nil
 }

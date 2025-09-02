@@ -208,7 +208,16 @@ func Benchmark_DomainsRo(b *testing.B) {
 
 	b.Run("open RoTx every read", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			dm.WithDomainsRo(0, func(sd *state.SharedDomains) error {
+			dm.withDomainsRo_callerThread(0, func(sd *state.SharedDomains) error {
+				sd.GetCommitmentContext().AccountRaw(addr)
+				return nil
+			})
+		}
+	})
+
+	b.Run("reuse RoTx in worker threads", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			dm.withDomainsRo_workerThread(0, func(sd *state.SharedDomains) error {
 				sd.GetCommitmentContext().AccountRaw(addr)
 				return nil
 			})

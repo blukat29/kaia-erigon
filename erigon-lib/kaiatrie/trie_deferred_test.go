@@ -275,7 +275,7 @@ func Test_DeferredAccountTrie_ModeErigonV3_Delete(t *testing.T) {
 	{
 		t.Log("Commit deletion of the second batch to block 1") // state = accounts1
 		trie := NewDeferredAccountTrie(dm, 0, false, ModeErigonV3)
-		trie.SetTrace(true)
+		trie.SetTrace(false)
 		for _, a := range accounts2 {
 			addr := hexutil.MustDecode(a[0])
 			require.NoError(t, trie.Delete(addr))
