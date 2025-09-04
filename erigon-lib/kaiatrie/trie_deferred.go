@@ -25,6 +25,7 @@ import (
 var (
 	_ Trie = (*DeferredAccountTrie)(nil)
 	_ Trie = (*DeferredStorageTrie)(nil)
+	_ Trie = (*DeferredStorageTrie2)(nil)
 )
 
 type DeferredAccountTrie struct {
@@ -229,4 +230,84 @@ func (t *DeferredStorageTrie) Commit() ([]byte, error) {
 		return t.ctx.Commit()
 	})
 	return h, err
+}
+
+type DeferredStorageTrie2 struct {
+	accountTrie *DeferredAccountTrie
+	addr        common.Address
+	initialRoot common.Hash
+	updated     bool // true if the storage trie has ever been updated since construction.
+}
+
+func NewDeferredStorageTrie2(accountTrie *DeferredAccountTrie, addrB, storageRoot []byte) *DeferredStorageTrie2 {
+	var (
+		addr        = common.BytesToAddress(addrB)
+		dm          = accountTrie.dm
+		ctx         = accountTrie.ctx
+		roNum       = accountTrie.roNum
+		accountMode = accountTrie.ctx.accountMode
+	)
+
+	dm.WithDomainsRo(roNum, func(sd *state.SharedDomains) error {
+		ctx.SetDomains(sd)
+		acc, _ := ctx.AccountRaw(addr.Bytes())
+		if acc == nil {
+			// Add a surrogate account so HPH can calculate the storage root hash for this account even if
+			// the account does not exist just yet. Usually happens in contract deployment transaction's constructor().
+			ctx.PutAccount(addr.Bytes(), surrogateAccount(accountMode))
+		}
+		return nil
+	})
+
+	return &DeferredStorageTrie2{
+		accountTrie: accountTrie,
+		addr:        addr,
+		initialRoot: common.BytesToHash(storageRoot),
+	}
+}
+
+func (t *DeferredStorageTrie2) Get(key []byte) ([]byte, error) {
+	return t.accountTrie.ctx.StorageRaw(storageKey(t.addr, key))
+}
+
+func (t *DeferredStorageTrie2) Update(key []byte, value []byte) error {
+	t.accountTrie.ctx.PutStorage(storageKey(t.addr, key), value)
+	return nil
+}
+
+func (t *DeferredStorageTrie2) Delete(key []byte) error {
+	t.accountTrie.ctx.PutStorage(storageKey(t.addr, key), nil)
+	return nil
+}
+
+func (t *DeferredStorageTrie2) Hash() ([]byte, error) {
+	_, err := t.accountTrie.Hash()
+	if err != nil {
+		return nil, err
+	}
+
+	// Harvest the storage root hash, which is byproduct of the state root hash calculation.
+	storageRoot := t.accountTrie.ctx.trie.LastStorageRootHash(t.addr.Bytes())
+	if len(storageRoot) == 0 { // trie didn't calculate the storage root hash.
+		if t.updated {
+			// If there was an update but the storage root hash is not calculated, something is wrong.
+			return nil, fmt.Errorf("%w: addr=%x", errNoStorageRoot, t.addr)
+		} else {
+			// If the storage trie has never been updated, it is normal that storage root hash is not calculated.
+			// Return the initial storage root hash.
+			return t.initialRoot.Bytes(), nil
+		}
+	} else {
+		return storageRoot, nil
+	}
+}
+
+func (t *DeferredStorageTrie2) Commit() ([]byte, error) {
+	storageRoot, err := t.Hash()
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = t.accountTrie.Commit()
+	return storageRoot, err
 }

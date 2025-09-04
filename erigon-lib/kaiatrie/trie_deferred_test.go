@@ -22,17 +22,9 @@ import (
 	"github.com/erigontech/erigon-lib/commitment"
 	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/common/hexutil"
-	"github.com/erigontech/erigon-lib/rlp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func mustDecodeRLP(t *testing.T, s string) string {
-	b := hexutil.MustDecode(s)
-	var v []byte
-	require.NoError(t, rlp.DecodeBytes(b, &v))
-	return "0x" + hex.EncodeToString(v)
-}
 
 func Test_DeferredAccountTrie_ModeErigonV3(t *testing.T) {
 	var (
@@ -532,5 +524,57 @@ func Test_DeferredStorageTrie_ModeRawBytes(t *testing.T) {
 		acc, err := trie.Get(addr)
 		require.NoError(t, err)
 		require.Equal(t, hexutil.MustDecode(accountRLP), acc)
+	}
+}
+
+func Test_DeferredStorageTrie2_ModeRawBytes(t *testing.T) {
+	var (
+		// Kairos block #505584, contract 0x9fdd7a341308e969527bd6c928068edee8399807
+		addr    = common.HexToAddress("0x9fdd7a341308e969527bd6c928068edee8399807").Bytes()
+		storage = [][2]string{
+			{"0x0000000000000000000000000000000000000000000000000000000000000003", "0x424820546f6b656e000000000000000000000000000000000000000000000010"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000004", "0x4248540000000000000000000000000000000000000000000000000000000006"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000005", "0xefef9fe22a5e1ae68baea7069dcb1ac607ed78cf12"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000002", "0x033b2e3c9fd0803ce8000000"},
+			{"0x3eaa2d76dda4c78c477b7231cb487c2b8fa646a998125bc96085f54b529e14a6", "0x033b2e3c9fd0803ce8000000"},
+		}
+
+		// kaia.getAccount('0x9fdd7a341308e969527bd6c928068edee8399807', 505584)
+		storageRoot = "41fbe8aca458c42a31464a6eff4e221b66f6ffd341a6836c33bf677f63810329"
+		accountRLP  = "0x02f849c501808003c0a041fbe8aca458c42a31464a6eff4e221b66f6ffd341a6836c33bf677f63810329a0e4fc5786883b715cd4ea3e4970357eafcd8d76c992023c590fe934d655c20dcb80"
+
+		// Hypothetical state trie with only one account because we can't reproduce all accounts in Kairos block #505584 in this test.
+		stateRoot = "019626d8de9176415ca8169f98742ae112e7783c3e38605f9622d626b27a3b6c"
+	)
+	_ = accountRLP
+	_ = stateRoot
+
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	{
+		t.Log("Commit storage and account")
+		accountTrie := NewDeferredAccountTrie(dm, 0, true, ModeRawBytes)
+		storageTrie := NewDeferredStorageTrie(dm, addr, nil, 0, true, ModeRawBytes)
+
+		for _, s := range storage {
+			key, value := hexutil.MustDecode(s[0]), hexutil.MustDecode(s[1])
+			require.NoError(t, storageTrie.Update(key, value))
+		}
+		checkTrieCommit(t, storageTrie, storageRoot)
+
+		require.NoError(t, accountTrie.Update(addr, hexutil.MustDecode(accountRLP)))
+		checkTrieCommit(t, accountTrie, stateRoot)
+	}
+	{
+		t.Log("Inspect account and storage tries")
+		accountTrie := NewDeferredAccountTrie(dm, 0, false, ModeRawBytes)
+		acc, err := accountTrie.Get(addr)
+		require.NoError(t, err)
+		require.Equal(t, hexutil.MustDecode(accountRLP), acc)
+
+		storageTrie := NewDeferredStorageTrie2(accountTrie, addr, common.HexToHash(storageRoot).Bytes())
+		checkTrieGet(t, storageTrie, storage)
 	}
 }
