@@ -168,7 +168,6 @@ func surrogateAccount(accountMode AccountMode) []byte {
 
 func (t *DeferredStorageTrie) SetTrace(trace bool) {
 	t.ctx.SetTrace(trace)
-	t.ctx.trie.SetTrace(trace)
 }
 
 func (t *DeferredStorageTrie) Get(key []byte) ([]byte, error) {
@@ -264,6 +263,10 @@ func NewDeferredStorageTrie2(accountTrie *DeferredAccountTrie, addrB, storageRoo
 		addr:        addr,
 		initialRoot: common.BytesToHash(storageRoot),
 	}
+}
+
+func (t *DeferredStorageTrie2) SetTrace(trace bool) {
+	t.accountTrie.ctx.SetTrace(trace)
 }
 
 func (t *DeferredStorageTrie2) Get(key []byte) ([]byte, error) {

@@ -475,6 +475,8 @@ func Test_DeferredAccountTrie_ModeRawBytes_Examples(t *testing.T) {
 func Test_DeferredStorageTrie_ModeRawBytes(t *testing.T) {
 	var (
 		// Kairos block #505584, contract 0x9fdd7a341308e969527bd6c928068edee8399807
+		// debug.traceTransaction('0x9fedb5242f3397b344e0cd5d9cd3de3b0be19e6a99f532c4236d1b8729a5a9f3')
+		// cat out.json | jq '.structLogs[] | select(.op == "SSTORE")'
 		addr    = common.HexToAddress("0x9fdd7a341308e969527bd6c928068edee8399807").Bytes()
 		storage = [][2]string{
 			{"0x0000000000000000000000000000000000000000000000000000000000000003", "0x424820546f6b656e000000000000000000000000000000000000000000000010"},
