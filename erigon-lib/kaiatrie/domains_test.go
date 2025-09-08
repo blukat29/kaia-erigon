@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/erigontech/erigon-lib/common"
+	"github.com/erigontech/erigon-lib/common/hexutil"
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/erigontech/erigon-lib/log/v3"
 	"github.com/erigontech/erigon-lib/state"
@@ -224,4 +225,77 @@ func Benchmark_DomainsRo(b *testing.B) {
 			})
 		}
 	})
+}
+
+func Test_DomainsManager_Iterator(t *testing.T) {
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	var (
+		addrs = [][]byte{
+			common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes(),
+			common.HexToAddress("0x2222222222222222222222222222222222222222").Bytes(),
+			common.HexToAddress("0x3333333333333333333333333333333333333333").Bytes(),
+		}
+		accs = [][]byte{
+			accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(90)}),
+			accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(91)}),
+			accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(92)}),
+		}
+		slots = [][]byte{
+			common.HexToHash("0x1").Bytes(),
+			common.HexToHash("0x2").Bytes(),
+			common.HexToHash("0x3").Bytes(),
+		}
+		datas = [][]byte{
+			hexutil.MustDecode("0x12"),
+			hexutil.MustDecode("0x23"),
+			hexutil.MustDecode("0x34"),
+		}
+	)
+
+	require.NoError(t, dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
+		for i := 0; i < len(addrs); i++ {
+			sd.DomainPut(kv.AccountsDomain, addrs[i], nil, accs[i], nil, 0)
+		}
+		for i := 0; i < len(slots); i++ {
+			sd.DomainPut(kv.StorageDomain, append(addrs[0], slots[i]...), nil, datas[i], nil, 0)
+		}
+		return nil
+	}))
+
+	ait, err := NewAccountIterator(dm, 0)
+	require.NoError(t, err)
+	defer ait.Close()
+
+	for i := 0; i < len(addrs); i++ {
+		addr, acc, ok, err := ait.Next()
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, addrs[i], addr)
+		assert.Equal(t, accs[i], acc)
+	}
+	addr, acc, ok, err := ait.Next()
+	assert.NoError(t, err)
+	assert.False(t, ok)
+	assert.Nil(t, addr)
+	assert.Nil(t, acc)
+
+	sit, err := NewStorageIterator(dm, addrs[0], 0)
+	require.NoError(t, err)
+	defer sit.Close()
+
+	for i := 0; i < len(slots); i++ {
+		slot, data, ok, err := sit.Next()
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, slots[i], slot)
+		assert.Equal(t, datas[i], data)
+	}
+	slot, data, ok, err := sit.Next()
+	assert.NoError(t, err)
+	assert.False(t, ok)
+	assert.Nil(t, slot)
+	assert.Nil(t, data)
 }

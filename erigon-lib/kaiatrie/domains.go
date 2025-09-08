@@ -29,7 +29,9 @@ import (
 	"github.com/erigontech/erigon-lib/config3"
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/erigontech/erigon-lib/kv/mdbx"
+	"github.com/erigontech/erigon-lib/kv/order"
 	"github.com/erigontech/erigon-lib/kv/rawdbv3"
+	"github.com/erigontech/erigon-lib/kv/stream"
 	"github.com/erigontech/erigon-lib/log/v3"
 	"github.com/erigontech/erigon-lib/state"
 	"golang.org/x/sync/semaphore"
@@ -40,6 +42,7 @@ var (
 
 	errCommitBlockTooLow  = errors.New("block number too low to commit")
 	errCommitBlockTooHigh = errors.New("block number too high to commit")
+	errStorageKeyTooShort = errors.New("storage key too short")
 )
 
 type DomainsUserFn func(sd *state.SharedDomains) error
@@ -338,7 +341,7 @@ func setTxNumsForCommit(sd *state.SharedDomains, tx kv.RwTx, blockNum uint64) er
 func setTxNumsForRead(sd *state.SharedDomains, blockNum uint64) error {
 	sd.SetBlockNum(blockNum)
 	sd.SetTxNum(blockNum + 1)
-	// Read already-committed data up to txNum = less than txNum+1 = less than blockNum+2.
+	// Read already-committed data up to blockNum=blockNum == up to txNum=blockNum+1 == less than txNum=blockNum+2.
 	sd.GetCommitmentContext().SetLimitReadAsOfTxNum(blockNum+2, false)
 	// Reload hph state with the newly set LimitReadAsOfTxNum.
 	return sd.ReloadCommitment()
@@ -360,4 +363,78 @@ func writeTxNums(tx kv.RwTx, blockNum uint64) error {
 
 func rootKey(rootHash []byte) []byte {
 	return append(keyRootPrefix, common.BytesToHash(rootHash).Bytes()...)
+}
+
+// An iterator bound to a specific domain and block num.
+type DomainIterator struct {
+	blockNum uint64
+	tx       kv.Tx
+	aggTx    *state.AggregatorRoTx
+	it       stream.KV
+
+	isStorage bool
+}
+
+func NewDomainIterator(dm *DomainsManager, domain kv.Domain, isStorage bool, startKey, endKey []byte, blockNum uint64) (*DomainIterator, error) {
+	ctx := context.Background()
+
+	tx, err := dm.db.BeginRo(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	aggTx := dm.agg.BeginFilesRo()
+
+	// Read already-committed data up to blockNum=blockNum == up to txNum=blockNum+1 == less than txNum=blockNum+2.
+	it, err := aggTx.RangeAsOf(ctx, tx, domain, startKey, endKey, blockNum+2, order.Asc, kv.Unlim)
+	if err != nil {
+		aggTx.Close()
+		tx.Rollback()
+		return nil, err
+	}
+
+	return &DomainIterator{
+		blockNum:  blockNum,
+		tx:        tx,
+		aggTx:     aggTx,
+		it:        it,
+		isStorage: isStorage,
+	}, nil
+}
+
+func NewAccountIterator(dm *DomainsManager, blockNum uint64) (*DomainIterator, error) {
+	return NewDomainIterator(dm, kv.AccountsDomain, false, nil, nil, blockNum)
+}
+
+func NewStorageIterator(dm *DomainsManager, addrB []byte, blockNum uint64) (*DomainIterator, error) {
+	// core/state/dump.go:DumpToCollector
+	var (
+		addr      = common.BytesToAddress(addrB)
+		startKey  = addr.Bytes()
+		endKey, _ = kv.NextSubtree(startKey)
+	)
+	return NewDomainIterator(dm, kv.StorageDomain, true, startKey, endKey, blockNum)
+}
+
+func (dit *DomainIterator) Next() ([]byte, []byte, bool, error) {
+	if !dit.it.HasNext() {
+		return nil, nil, false, nil
+	}
+	k, v, err := dit.it.Next()
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if dit.isStorage {
+		if len(k) <= 20 {
+			return nil, nil, false, errStorageKeyTooShort
+		}
+		k = k[20:]
+	}
+	return k, v, true, nil
+}
+
+func (dit *DomainIterator) Close() {
+	dit.it.Close()
+	dit.aggTx.Close()
+	dit.tx.Rollback()
 }
