@@ -17,6 +17,8 @@ package kaiatrie
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/erigontech/erigon-lib/common"
@@ -29,6 +31,28 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func checkIt(t *testing.T, it *DomainsIterator, items [][2]string) {
+	// Sort items by key.
+	expected := slices.Clone(items)
+	slices.SortFunc(expected, func(a, b [2]string) int {
+		return strings.Compare(a[0], b[0])
+	})
+
+	for _, item := range expected {
+		expectedKey, expectedValue := hexutil.MustDecode(item[0]), hexutil.MustDecode(item[1])
+		key, value, ok, err := it.Next()
+		require.NoError(t, err)
+		assert.Equal(t, true, ok)
+		assert.Equal(t, expectedKey, key)
+		assert.Equal(t, expectedValue, value)
+	}
+	key, value, ok, err := it.Next()
+	assert.NoError(t, err)
+	assert.False(t, ok)
+	assert.Nil(t, key)
+	assert.Nil(t, value)
+}
 
 func Test_DomainsManager_BlockNums(t *testing.T) {
 	noop := func(sd *state.SharedDomains) error { return nil }
@@ -233,69 +257,48 @@ func Test_DomainsManager_Iterator(t *testing.T) {
 	defer dm.Close()
 
 	var (
-		addrs = [][]byte{
-			common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes(),
-			common.HexToAddress("0x2222222222222222222222222222222222222222").Bytes(),
-			common.HexToAddress("0x3333333333333333333333333333333333333333").Bytes(),
+		accounts = [][2]string{
+			{"0x1111111111111111111111111111111111111111", "0x00015a0000"},
+			{"0x2222222222222222222222222222222222222222", "0x00015b0000"},
+			{"0x3333333333333333333333333333333333333333", "0x00015c0000"},
 		}
-		accs = [][]byte{
-			accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(90)}),
-			accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(91)}),
-			accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(92)}),
-		}
-		slots = [][]byte{
-			common.HexToHash("0x1").Bytes(),
-			common.HexToHash("0x2").Bytes(),
-			common.HexToHash("0x3").Bytes(),
-		}
-		datas = [][]byte{
-			hexutil.MustDecode("0x12"),
-			hexutil.MustDecode("0x23"),
-			hexutil.MustDecode("0x34"),
+
+		contractAddr = common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes()
+		storage      = [][2]string{
+			{"0x0000000000000000000000000000000000000000000000000000000000000001", "0x12"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000002", "0x23"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000003", "0x34"},
 		}
 	)
 
-	require.NoError(t, dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
-		for i := 0; i < len(addrs); i++ {
-			sd.DomainPut(kv.AccountsDomain, addrs[i], nil, accs[i], nil, 0)
-		}
-		for i := 0; i < len(slots); i++ {
-			sd.DomainPut(kv.StorageDomain, append(addrs[0], slots[i]...), nil, datas[i], nil, 0)
-		}
-		return nil
-	}))
-
-	ait, err := NewAccountIterator(dm, 0)
-	require.NoError(t, err)
-	defer ait.Close()
-
-	for i := 0; i < len(addrs); i++ {
-		addr, acc, ok, err := ait.Next()
-		require.NoError(t, err)
-		assert.True(t, ok)
-		assert.Equal(t, addrs[i], addr)
-		assert.Equal(t, accs[i], acc)
+	// Commit across 3 blocks.
+	for i := 0; i < 3; i++ {
+		addr, acc := hexutil.MustDecode(accounts[i][0]), hexutil.MustDecode(accounts[i][1])
+		slot, data := hexutil.MustDecode(storage[i][0]), hexutil.MustDecode(storage[i][1])
+		require.NoError(t, dm.WithDomainsRw(uint64(i), func(sd *state.SharedDomains) error {
+			sd.DomainPut(kv.AccountsDomain, addr, nil, acc, nil, 0)
+			sd.DomainPut(kv.StorageDomain, append(contractAddr, slot...), nil, data, nil, 0)
+			return nil
+		}))
 	}
-	addr, acc, ok, err := ait.Next()
-	assert.NoError(t, err)
-	assert.False(t, ok)
-	assert.Nil(t, addr)
-	assert.Nil(t, acc)
 
-	sit, err := NewStorageIterator(dm, addrs[0], 0)
+	it, err := NewAccountIterator(dm, 0)
 	require.NoError(t, err)
-	defer sit.Close()
+	defer it.Close()
+	checkIt(t, it, accounts[:1]) // only 1 account is iterated at block 0.
 
-	for i := 0; i < len(slots); i++ {
-		slot, data, ok, err := sit.Next()
-		require.NoError(t, err)
-		assert.True(t, ok)
-		assert.Equal(t, slots[i], slot)
-		assert.Equal(t, datas[i], data)
-	}
-	slot, data, ok, err := sit.Next()
-	assert.NoError(t, err)
-	assert.False(t, ok)
-	assert.Nil(t, slot)
-	assert.Nil(t, data)
+	it, err = NewAccountIterator(dm, 1)
+	require.NoError(t, err)
+	defer it.Close()
+	checkIt(t, it, accounts[:2])
+
+	it, err = NewAccountIterator(dm, 2)
+	require.NoError(t, err)
+	defer it.Close()
+	checkIt(t, it, accounts[:3])
+
+	it, err = NewStorageIterator(dm, contractAddr, 2)
+	require.NoError(t, err)
+	defer it.Close()
+	checkIt(t, it, storage)
 }

@@ -366,7 +366,7 @@ func rootKey(rootHash []byte) []byte {
 }
 
 // An iterator bound to a specific domain and block num.
-type DomainIterator struct {
+type DomainsIterator struct {
 	blockNum uint64
 	tx       kv.Tx
 	aggTx    *state.AggregatorRoTx
@@ -375,7 +375,7 @@ type DomainIterator struct {
 	isStorage bool
 }
 
-func NewDomainIterator(dm *DomainsManager, domain kv.Domain, isStorage bool, startKey, endKey []byte, blockNum uint64) (*DomainIterator, error) {
+func NewDomainIterator(dm *DomainsManager, domain kv.Domain, isStorage bool, startKey, endKey []byte, blockNum uint64) (*DomainsIterator, error) {
 	ctx := context.Background()
 
 	tx, err := dm.db.BeginRo(ctx)
@@ -393,7 +393,7 @@ func NewDomainIterator(dm *DomainsManager, domain kv.Domain, isStorage bool, sta
 		return nil, err
 	}
 
-	return &DomainIterator{
+	return &DomainsIterator{
 		blockNum:  blockNum,
 		tx:        tx,
 		aggTx:     aggTx,
@@ -402,11 +402,11 @@ func NewDomainIterator(dm *DomainsManager, domain kv.Domain, isStorage bool, sta
 	}, nil
 }
 
-func NewAccountIterator(dm *DomainsManager, blockNum uint64) (*DomainIterator, error) {
+func NewAccountIterator(dm *DomainsManager, blockNum uint64) (*DomainsIterator, error) {
 	return NewDomainIterator(dm, kv.AccountsDomain, false, nil, nil, blockNum)
 }
 
-func NewStorageIterator(dm *DomainsManager, addrB []byte, blockNum uint64) (*DomainIterator, error) {
+func NewStorageIterator(dm *DomainsManager, addrB []byte, blockNum uint64) (*DomainsIterator, error) {
 	// core/state/dump.go:DumpToCollector
 	var (
 		addr      = common.BytesToAddress(addrB)
@@ -416,13 +416,19 @@ func NewStorageIterator(dm *DomainsManager, addrB []byte, blockNum uint64) (*Dom
 	return NewDomainIterator(dm, kv.StorageDomain, true, startKey, endKey, blockNum)
 }
 
-func (dit *DomainIterator) Next() ([]byte, []byte, bool, error) {
+func (dit *DomainsIterator) Next() ([]byte, []byte, bool, error) {
 	if !dit.it.HasNext() {
 		return nil, nil, false, nil
 	}
 	k, v, err := dit.it.Next()
 	if err != nil {
 		return nil, nil, false, err
+	}
+	if len(v) == 0 {
+		// Skip non-existent entries. MDBX would iterate over all keys ever created
+		// regardless of the requested txNum. Sometimes not-yet-existent entries show up.
+		// We ignore them because they don't exist at this blockNum.
+		return nil, nil, false, nil
 	}
 	if dit.isStorage {
 		if len(k) <= 20 {
@@ -433,7 +439,7 @@ func (dit *DomainIterator) Next() ([]byte, []byte, bool, error) {
 	return k, v, true, nil
 }
 
-func (dit *DomainIterator) Close() {
+func (dit *DomainsIterator) Close() {
 	dit.it.Close()
 	dit.aggTx.Close()
 	dit.tx.Rollback()
