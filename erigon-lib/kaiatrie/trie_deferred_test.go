@@ -37,6 +37,7 @@ func Test_DeferredAccountTrie_ModeErigonV3(t *testing.T) {
 			{"0x1337beef00000000000000000000000000000000", "0x00083782dace9d921e950000"},
 		}
 		expectedHash1 = "920d630d52432c87f551191217322df4be72ce0dc22286f5d6dba01a99be5b4e"
+		root1         = common.HexToHash(expectedHash1).Bytes()
 
 		accounts2 = [][2]string{ // overwrites existing accounts
 			{"0x71562b71999873db5b286df957af199ec94617f7", "0x01040602220adf74630000"},
@@ -44,6 +45,7 @@ func Test_DeferredAccountTrie_ModeErigonV3(t *testing.T) {
 			{"0x0000000000000000000000000000000000000000", "0x000829a2241af62e1e950000"},
 		}
 		expectedHash2 = "4125375597c6290eb53103f518ea9486a121c3874d844307f7bc1ad7f9fa0c54"
+		root2         = common.HexToHash(expectedHash2).Bytes()
 
 		accountsMerged = [][2]string{
 			{"0x71562b71999873db5b286df957af199ec94617f7", "0x01040602220adf74630000"},
@@ -59,7 +61,7 @@ func Test_DeferredAccountTrie_ModeErigonV3(t *testing.T) {
 
 	{
 		t.Log("Opening trie at block 0")
-		trie := NewDeferredAccountTrie(dm, 0, true, ModeErigonV3) // start from block 0, commit to 0 (genesis)
+		trie := NewDeferredAccountTrie(dm, nil, 0, true, ModeErigonV3) // start from block 0, commit to 0 (genesis)
 		trie.SetTrace(false)
 
 		// Inspect empty state.
@@ -82,7 +84,7 @@ func Test_DeferredAccountTrie_ModeErigonV3(t *testing.T) {
 	}
 	{
 		t.Log("Opening trie at block 1")
-		trie := NewDeferredAccountTrie(dm, 0, false, ModeErigonV3) // start from block 0, commit to 1
+		trie := NewDeferredAccountTrie(dm, root1, 0, false, ModeErigonV3) // start from block 0, commit to 1
 		trie.SetTrace(false)
 
 		// Commit second batch at block 1.
@@ -102,7 +104,7 @@ func Test_DeferredAccountTrie_ModeErigonV3(t *testing.T) {
 	}
 	{
 		t.Log("Opening trie at block 2")
-		trie := NewDeferredAccountTrie(dm, 1, false, ModeErigonV3) // start from block 1, commit to 2
+		trie := NewDeferredAccountTrie(dm, root2, 1, false, ModeErigonV3) // start from block 1, commit to 2
 		trie.SetTrace(false)
 
 		// Inspect block 2.
@@ -111,7 +113,7 @@ func Test_DeferredAccountTrie_ModeErigonV3(t *testing.T) {
 	}
 	{
 		t.Log("Opening trie at block 0")
-		trie := NewDeferredAccountTrie(dm, 0, true, ModeErigonV3) // start from block 0, commit to 0 (genesis)
+		trie := NewDeferredAccountTrie(dm, nil, 0, true, ModeErigonV3) // start from block 0, commit to 0 (genesis)
 		trie.SetTrace(false)
 
 		// Inspect block 0.
@@ -206,7 +208,7 @@ func Test_DeferredStorageTrie_ModeErigonV3(t *testing.T) {
 	}
 	{
 		t.Log("Update accounts")
-		trie := NewDeferredAccountTrie(dm, 0, true, ModeErigonV3)
+		trie := NewDeferredAccountTrie(dm, nil, 0, true, ModeErigonV3)
 		for _, acc := range accs {
 			addr, acc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
 			require.NoError(t, trie.Update(addr, acc))
@@ -252,7 +254,7 @@ func Test_DeferredAccountTrie_ModeErigonV3_Delete(t *testing.T) {
 
 	{
 		t.Log("Commit both batches to block 0") // state = acounts1 + accounts2
-		trie := NewDeferredAccountTrie(dm, 0, true, ModeErigonV3)
+		trie := NewDeferredAccountTrie(dm, nil, 0, true, ModeErigonV3)
 		for _, a := range accounts1 {
 			addr, acc := hexutil.MustDecode(a[0]), hexutil.MustDecode(a[1])
 			require.NoError(t, trie.Update(addr, acc))
@@ -266,7 +268,7 @@ func Test_DeferredAccountTrie_ModeErigonV3_Delete(t *testing.T) {
 	}
 	{
 		t.Log("Commit deletion of the second batch to block 1") // state = accounts1
-		trie := NewDeferredAccountTrie(dm, 0, false, ModeErigonV3)
+		trie := NewDeferredAccountTrie(dm, nil, 0, false, ModeErigonV3)
 		trie.SetTrace(false)
 		for _, a := range accounts2 {
 			addr := hexutil.MustDecode(a[0])
@@ -279,13 +281,13 @@ func Test_DeferredAccountTrie_ModeErigonV3_Delete(t *testing.T) {
 	}
 	{
 		t.Log("Inspect block 0")
-		trie := NewDeferredAccountTrie(dm, 0, false, ModeErigonV3)
+		trie := NewDeferredAccountTrie(dm, nil, 0, false, ModeErigonV3)
 		checkTrieGet(t, trie, accounts1)
 		checkTrieGet(t, trie, accounts2) // Second batch exists at this point
 	}
 	{
 		t.Log("Inspect block 1")
-		trie := NewDeferredAccountTrie(dm, 1, false, ModeErigonV3)
+		trie := NewDeferredAccountTrie(dm, nil, 1, false, ModeErigonV3)
 		checkTrieGet(t, trie, accounts1)
 		checkTrieGet(t, trie, accounts2Deleted)
 	}
@@ -304,6 +306,11 @@ func Test_DeferredAccountTrie_ModeRawBytes_Commit(t *testing.T) {
 			"be751ffacf5fcf9998d4f90b87164ff95166d55e445c8d27cfecbe0e67a032b6",
 			"60e8f25e2fb479e625347c1f11e2f07c9cd7d0a5320013294d89281b6fceed4f",
 		}
+		roots = [][]byte{
+			common.HexToHash(expectedHashes[0]).Bytes(),
+			common.HexToHash(expectedHashes[1]).Bytes(),
+			common.HexToHash(expectedHashes[2]).Bytes(),
+		}
 	)
 
 	dm, err := NewTemporaryDomainsManager(t.TempDir())
@@ -312,7 +319,7 @@ func Test_DeferredAccountTrie_ModeRawBytes_Commit(t *testing.T) {
 
 	{
 		t.Log("Commit block #0 (genesis)")
-		trie := NewDeferredAccountTrie(dm, 0, true, ModeRawBytes) // start from block 0, commit to 0 (genesis)
+		trie := NewDeferredAccountTrie(dm, nil, 0, true, ModeRawBytes) // start from block 0, commit to 0 (genesis)
 		checkTrieHash(t, trie, hex.EncodeToString(commitment.EmptyRootHash))
 		require.NoError(t, trie.Update(hexutil.MustDecode(accounts[0][0]), hexutil.MustDecode(accounts[0][1])))
 		checkTrieCommit(t, trie, expectedHashes[0])
@@ -320,7 +327,7 @@ func Test_DeferredAccountTrie_ModeRawBytes_Commit(t *testing.T) {
 	}
 	{
 		t.Log("Commit block #1")
-		trie := NewDeferredAccountTrie(dm, 0, false, ModeRawBytes) // start from block 0, commit to 1
+		trie := NewDeferredAccountTrie(dm, roots[0], 0, false, ModeRawBytes) // start from block 0, commit to 1
 		checkTrieHash(t, trie, expectedHashes[0])
 		require.NoError(t, trie.Update(hexutil.MustDecode(accounts[1][0]), hexutil.MustDecode(accounts[1][1])))
 		checkTrieCommit(t, trie, expectedHashes[1])
@@ -329,7 +336,7 @@ func Test_DeferredAccountTrie_ModeRawBytes_Commit(t *testing.T) {
 	}
 	{
 		t.Log("Commit block #2")
-		trie := NewDeferredAccountTrie(dm, 1, false, ModeRawBytes) // start from block 1, commit to 2
+		trie := NewDeferredAccountTrie(dm, roots[1], 1, false, ModeRawBytes) // start from block 1, commit to 2
 		checkTrieHash(t, trie, expectedHashes[1])
 		require.NoError(t, trie.Update(hexutil.MustDecode(accounts[2][0]), hexutil.MustDecode(accounts[2][1])))
 		checkTrieCommit(t, trie, expectedHashes[2])
@@ -463,7 +470,7 @@ func Test_DeferredAccountTrie_ModeRawBytes_Examples(t *testing.T) {
 		require.NoError(t, err)
 		defer dm.Close()
 
-		trie := NewDeferredAccountTrie(dm, 0, true, ModeRawBytes)
+		trie := NewDeferredAccountTrie(dm, nil, 0, true, ModeRawBytes)
 		for _, acc := range tc.accounts {
 			addr, acc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
 			require.NoError(t, trie.Update(addr, acc))
@@ -511,7 +518,7 @@ func Test_DeferredStorageTrie_ModeRawBytes(t *testing.T) {
 	}
 	{
 		t.Log("Commit account trie")
-		trie := NewDeferredAccountTrie(dm, 0, true, ModeRawBytes)
+		trie := NewDeferredAccountTrie(dm, nil, 0, true, ModeRawBytes)
 		require.NoError(t, trie.Update(addr, hexutil.MustDecode(accountRLP)))
 		checkTrieCommit(t, trie, stateRoot)
 	}
@@ -522,7 +529,7 @@ func Test_DeferredStorageTrie_ModeRawBytes(t *testing.T) {
 	}
 	{
 		t.Log("Inspect account trie")
-		trie := NewDeferredAccountTrie(dm, 0, false, ModeRawBytes)
+		trie := NewDeferredAccountTrie(dm, nil, 0, false, ModeRawBytes)
 		acc, err := trie.Get(addr)
 		require.NoError(t, err)
 		require.Equal(t, hexutil.MustDecode(accountRLP), acc)
@@ -557,7 +564,7 @@ func Test_DeferredStorageTrie2_ModeRawBytes(t *testing.T) {
 
 	{
 		t.Log("Commit storage and account")
-		accountTrie := NewDeferredAccountTrie(dm, 0, true, ModeRawBytes)
+		accountTrie := NewDeferredAccountTrie(dm, nil, 0, true, ModeRawBytes)
 		storageTrie := NewDeferredStorageTrie(dm, addr, nil, 0, true, ModeRawBytes)
 
 		for _, s := range storage {
@@ -571,7 +578,7 @@ func Test_DeferredStorageTrie2_ModeRawBytes(t *testing.T) {
 	}
 	{
 		t.Log("Inspect account and storage tries")
-		accountTrie := NewDeferredAccountTrie(dm, 0, false, ModeRawBytes)
+		accountTrie := NewDeferredAccountTrie(dm, nil, 0, false, ModeRawBytes)
 		acc, err := accountTrie.Get(addr)
 		require.NoError(t, err)
 		require.Equal(t, hexutil.MustDecode(accountRLP), acc)
