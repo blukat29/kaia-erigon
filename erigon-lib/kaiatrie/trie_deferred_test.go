@@ -565,7 +565,7 @@ func Test_DeferredStorageTrie2_ModeRawBytes(t *testing.T) {
 	{
 		t.Log("Commit storage and account")
 		accountTrie := NewDeferredAccountTrie(dm, nil, 0, true, ModeRawBytes)
-		storageTrie := NewDeferredStorageTrie(dm, addr, nil, 0, true, ModeRawBytes)
+		storageTrie := NewDeferredStorageTrie2(accountTrie, addr, nil)
 
 		for _, s := range storage {
 			key, value := hexutil.MustDecode(s[0]), hexutil.MustDecode(s[1])

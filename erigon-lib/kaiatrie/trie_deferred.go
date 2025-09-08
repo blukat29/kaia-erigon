@@ -128,7 +128,8 @@ type DeferredStorageTrie struct {
 	roNum uint64
 	rwNum uint64
 
-	updated bool // true if the storage trie has ever been updated since construction.
+	updated          bool // true if the storage trie has ever been updated since construction.
+	mayNeedSurrogate bool
 }
 
 func NewDeferredStorageTrie(dm *DomainsManager, addrB, storageRoot []byte, blockNum uint64, genesis bool, accountMode AccountMode) *DeferredStorageTrie {
@@ -144,24 +145,25 @@ func NewDeferredStorageTrie(dm *DomainsManager, addrB, storageRoot []byte, block
 		rwNum = blockNum + 1
 	}
 
-	dm.WithDomainsRo(roNum, func(sd *state.SharedDomains) error {
-		ctx.SetDomains(sd)
-		acc, _ := ctx.AccountRaw(addr.Bytes())
-		if acc == nil {
-			// Add a surrogate account so HPH can calculate the storage root hash for this account even if
-			// the account does not exist just yet. Usually happens in contract deployment transaction's constructor().
-			ctx.PutAccount(addr.Bytes(), surrogateAccount(accountMode))
-		}
-		return nil
-	})
+	// dm.WithDomainsRo(roNum, func(sd *state.SharedDomains) error {
+	// 	ctx.SetDomains(sd)
+	// 	acc, _ := ctx.AccountRaw(addr.Bytes())
+	// 	if acc == nil {
+	// 		// Add a surrogate account so HPH can calculate the storage root hash for this account even if
+	// 		// the account does not exist just yet. Usually happens in contract deployment transaction's constructor().
+	// 		ctx.PutAccount(addr.Bytes(), surrogateAccount(accountMode))
+	// 	}
+	// 	return nil
+	// })
 
 	return &DeferredStorageTrie{
-		dm:          dm,
-		ctx:         ctx,
-		addr:        addr,
-		initialRoot: common.BytesToHash(storageRoot),
-		roNum:       roNum,
-		rwNum:       rwNum,
+		dm:               dm,
+		ctx:              ctx,
+		addr:             addr,
+		initialRoot:      common.BytesToHash(storageRoot),
+		roNum:            roNum,
+		rwNum:            rwNum,
+		mayNeedSurrogate: true,
 	}
 }
 
@@ -194,6 +196,20 @@ func (t *DeferredStorageTrie) Get(key []byte) ([]byte, error) {
 }
 
 func (t *DeferredStorageTrie) Update(key []byte, value []byte) error {
+	if t.mayNeedSurrogate {
+		t.dm.WithDomainsRo(t.roNum, func(sd *state.SharedDomains) error {
+			t.ctx.SetDomains(sd)
+			acc, _ := t.ctx.AccountRaw(t.addr.Bytes())
+			if acc == nil {
+				// Add a surrogate account so HPH can calculate the storage root hash for this account even if
+				// the account does not exist just yet. Usually happens in contract deployment transaction's constructor().
+				t.ctx.PutAccount(t.addr.Bytes(), surrogateAccount(t.ctx.accountMode))
+			}
+			return nil
+		})
+		t.mayNeedSurrogate = false
+	}
+
 	t.ctx.PutStorage(storageKey(t.addr, key), value)
 	return nil
 }
@@ -244,36 +260,39 @@ func (t *DeferredStorageTrie) Commit() ([]byte, error) {
 }
 
 type DeferredStorageTrie2 struct {
-	accountTrie *DeferredAccountTrie
-	addr        common.Address
-	initialRoot common.Hash
-	updated     bool
+	accountTrie      *DeferredAccountTrie
+	addr             common.Address
+	initialRoot      common.Hash
+	updated          bool
+	mayNeedSurrogate bool
 }
 
 func NewDeferredStorageTrie2(accountTrie *DeferredAccountTrie, addrB, storageRoot []byte) *DeferredStorageTrie2 {
 	var (
-		addr        = common.BytesToAddress(addrB)
-		dm          = accountTrie.dm
-		ctx         = accountTrie.ctx
-		roNum       = accountTrie.roNum
-		accountMode = accountTrie.ctx.accountMode
+		addr = common.BytesToAddress(addrB)
+		// dm          = accountTrie.dm
+		// ctx         = accountTrie.ctx
+		// roNum       = accountTrie.roNum
+		// accountMode = accountTrie.ctx.accountMode
 	)
 
-	dm.WithDomainsRo(roNum, func(sd *state.SharedDomains) error {
-		ctx.SetDomains(sd)
-		acc, _ := ctx.AccountRaw(addr.Bytes())
-		if acc == nil {
-			// Add a surrogate account so HPH can calculate the storage root hash for this account even if
-			// the account does not exist just yet. Usually happens in contract deployment transaction's constructor().
-			ctx.PutAccount(addr.Bytes(), surrogateAccount(accountMode))
-		}
-		return nil
-	})
+	/*	dm.WithDomainsRo(roNum, func(sd *state.SharedDomains) error {
+			ctx.SetDomains(sd)
+			acc, _ := ctx.AccountRaw(addr.Bytes())
+			if acc == nil {
+				// Add a surrogate account so HPH can calculate the storage root hash for this account even if
+				// the account does not exist just yet. Usually happens in contract deployment transaction's constructor().
+				ctx.PutAccount(addr.Bytes(), surrogateAccount(accountMode))
+			}
+			return nil
+		})
+	*/
 
 	return &DeferredStorageTrie2{
-		accountTrie: accountTrie,
-		addr:        addr,
-		initialRoot: normalizeInitialRoot(storageRoot),
+		accountTrie:      accountTrie,
+		addr:             addr,
+		initialRoot:      normalizeInitialRoot(storageRoot),
+		mayNeedSurrogate: true,
 	}
 }
 
@@ -286,6 +305,17 @@ func (t *DeferredStorageTrie2) Get(key []byte) ([]byte, error) {
 }
 
 func (t *DeferredStorageTrie2) Update(key []byte, value []byte) error {
+	if t.mayNeedSurrogate {
+		acc, err := t.accountTrie.Get(t.addr.Bytes())
+		if err != nil {
+			return err
+		}
+		if acc == nil {
+			t.accountTrie.Update(t.addr.Bytes(), surrogateAccount(t.accountTrie.ctx.accountMode))
+		}
+		t.mayNeedSurrogate = false
+	}
+
 	t.updated = true
 	t.accountTrie.ctx.PutStorage(storageKey(t.addr, key), value)
 	return nil
