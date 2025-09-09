@@ -22,6 +22,7 @@ import (
 	"github.com/erigontech/erigon-lib/commitment"
 	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/common/hexutil"
+	"github.com/erigontech/erigon-lib/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -223,76 +224,6 @@ func Test_DeferredStorageTrie_ModeErigonV3(t *testing.T) {
 	}
 }
 
-func Test_DeferredAccountTrie_ModeErigonV3_Delete(t *testing.T) {
-	var (
-		// Test_HexPatriciaHashed_UniqueRepresentation2 data in ErigonV3 account format.
-		// Manually created using accounts.SerialiseV3.
-		accounts1 = [][2]string{
-			{"0x71562b71999873db5b286df957af199ec94617f7", "0x0103043b98a7830000"},
-			{"0x3a220f351252089d385b29beca14e27f204c296a", "0x00030dbc8a0000"},
-			{"0x0000000000000000000000000000000000000000", "0x00081bc16d674eca1e950000"},
-			{"0x1337beef00000000000000000000000000000000", "0x00083782dace9d921e950000"},
-		}
-		expectedHash1 = "920d630d52432c87f551191217322df4be72ce0dc22286f5d6dba01a99be5b4e"
-
-		accounts2 = [][2]string{
-			{"0x00000000000000000000000000000000000000f5", "0x0001040000"},
-			{"0x00000000000000000000000000000000000000ff", "0x0302958c030dbc8a0000"},
-		}
-		accounts2Deleted = [][2]string{
-			{"0x00000000000000000000000000000000000000f5", "0x"},
-			{"0x00000000000000000000000000000000000000ff", "0x"},
-		}
-	)
-	_ = expectedHash1
-	_ = accounts1
-	_ = accounts2
-
-	dm, err := NewTemporaryDomainsManager(t.TempDir())
-	require.NoError(t, err)
-	defer dm.Close()
-
-	{
-		t.Log("Commit both batches to block 0") // state = acounts1 + accounts2
-		trie := NewDeferredAccountTrie(dm, nil, 0, true, ModeErigonV3)
-		for _, a := range accounts1 {
-			addr, acc := hexutil.MustDecode(a[0]), hexutil.MustDecode(a[1])
-			require.NoError(t, trie.Update(addr, acc))
-		}
-		for _, a := range accounts2 {
-			addr, acc := hexutil.MustDecode(a[0]), hexutil.MustDecode(a[1])
-			require.NoError(t, trie.Update(addr, acc))
-		}
-		_, err := trie.Commit()
-		require.NoError(t, err)
-	}
-	{
-		t.Log("Commit deletion of the second batch to block 1") // state = accounts1
-		trie := NewDeferredAccountTrie(dm, nil, 0, false, ModeErigonV3)
-		trie.SetTrace(false)
-		for _, a := range accounts2 {
-			addr := hexutil.MustDecode(a[0])
-			require.NoError(t, trie.Delete(addr))
-		}
-		checkTrieCommit(t, trie, expectedHash1)
-
-		checkTrieGet(t, trie, accounts1)        // First batch should still be present
-		checkTrieGet(t, trie, accounts2Deleted) // Second batch should have been deleted
-	}
-	{
-		t.Log("Inspect block 0")
-		trie := NewDeferredAccountTrie(dm, nil, 0, false, ModeErigonV3)
-		checkTrieGet(t, trie, accounts1)
-		checkTrieGet(t, trie, accounts2) // Second batch exists at this point
-	}
-	{
-		t.Log("Inspect block 1")
-		trie := NewDeferredAccountTrie(dm, nil, 1, false, ModeErigonV3)
-		checkTrieGet(t, trie, accounts1)
-		checkTrieGet(t, trie, accounts2Deleted)
-	}
-}
-
 func Test_DeferredAccountTrie_ModeRawBytes_Commit(t *testing.T) {
 	var (
 		// Kairos block #1
@@ -477,6 +408,41 @@ func Test_DeferredAccountTrie_ModeRawBytes_Examples(t *testing.T) {
 		}
 		checkTrieHash(t, trie, tc.expectedHash)
 	}
+}
+
+func Test_DeferredAccountTrie_ModeRawBytes_Delete(t *testing.T) {
+	var (
+		addr  = hexutil.MustDecode("0x9fdd7a341308e969527bd6c928068edee8399807")
+		acc   = hexutil.MustDecode("0x02f849c501808003c0a041fbe8aca458c42a31464a6eff4e221b66f6ffd341a6836c33bf677f63810329a0e4fc5786883b715cd4ea3e4970357eafcd8d76c992023c590fe934d655c20dcb80")
+		hash0 = "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421" // emptyRoot
+		hash1 = "019626d8de9176415ca8169f98742ae112e7783c3e38605f9622d626b27a3b6c"
+	)
+
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	trie := NewDeferredAccountTrie(dm, nil, 0, true, ModeRawBytes)
+
+	require.NoError(t, dm.WithDomainsRw(0, func(sd *state.SharedDomains) error {
+		trie.ctx.SetDomains(sd)
+		checkTrieHash(t, trie, hash0)
+		return nil
+	}))
+
+	require.NoError(t, dm.WithDomainsRw(1, func(sd *state.SharedDomains) error {
+		trie.ctx.SetDomains(sd)
+		require.NoError(t, trie.Update(addr, acc))
+		checkTrieHash(t, trie, hash1)
+		return nil
+	}))
+
+	require.NoError(t, dm.WithDomainsRw(2, func(sd *state.SharedDomains) error {
+		trie.ctx.SetDomains(sd)
+		require.NoError(t, trie.Update(addr, nil))
+		checkTrieHash(t, trie, hash0)
+		return nil
+	}))
 }
 
 func Test_DeferredStorageTrie_ModeRawBytes(t *testing.T) {

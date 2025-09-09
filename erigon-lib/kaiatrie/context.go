@@ -146,8 +146,13 @@ func (c *DeferredContext) Account(plainKey []byte) (*commitment.Update, error) {
 		return nil, err
 	}
 
+	u := &commitment.Update{CodeHash: commitment.EmptyCodeHashArray} // default to empty code hash
+	if len(encAccount) == 0 {
+		u.Flags = commitment.DeleteUpdate
+		return u, nil
+	}
+
 	if c.accountMode == ModeRawBytes {
-		u := &commitment.Update{CodeHash: commitment.EmptyCodeHashArray} // default to empty code hash
 		u.Flags = commitment.RawBytesUpdate
 		u.RawBytes = make([]byte, len(encAccount))
 		copy(u.RawBytes, encAccount)
@@ -155,12 +160,6 @@ func (c *DeferredContext) Account(plainKey []byte) (*commitment.Update, error) {
 	}
 
 	if c.accountMode == ModeErigonV3 {
-		u := &commitment.Update{CodeHash: commitment.EmptyCodeHashArray} // default to empty code hash
-		if len(encAccount) == 0 {
-			u.Flags = commitment.DeleteUpdate
-			return u, nil
-		}
-
 		acc := new(accounts.Account)
 		if err := accounts.DeserialiseV3(acc, encAccount); err != nil {
 			return nil, err
