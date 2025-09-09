@@ -301,7 +301,14 @@ func (t *DeferredStorageTrie2) SetTrace(trace bool) {
 }
 
 func (t *DeferredStorageTrie2) Get(key []byte) ([]byte, error) {
-	return t.accountTrie.ctx.StorageRaw(storageKey(t.addr, key))
+	var result []byte
+	err := t.accountTrie.dm.WithDomainsRo(t.accountTrie.roNum, func(sd *state.SharedDomains) error {
+		t.accountTrie.ctx.SetDomains(sd)
+		data, err := t.accountTrie.ctx.StorageRaw(storageKey(t.addr, key))
+		result = data
+		return err
+	})
+	return result, err
 }
 
 func (t *DeferredStorageTrie2) Update(key []byte, value []byte) error {
