@@ -217,7 +217,10 @@ func (c *DeferredContext) Account(addr []byte) (*commitment.Update, error) {
 	}
 
 	if c.accountMode == ModeRawBytes {
-		panic("not implemented")
+		u.Flags = commitment.RawBytesUpdate
+		u.RawBytes = make([]byte, len(encAccount))
+		copy(u.RawBytes, encAccount)
+		return u, nil
 	}
 
 	if c.accountMode == ModeErigonV3 {

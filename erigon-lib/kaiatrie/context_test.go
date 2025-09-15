@@ -247,3 +247,31 @@ func Test_Context_ModeErigonV3(t *testing.T) {
 		assert.Equal(t, expectedHash2, hex.EncodeToString(h))
 	}
 }
+
+func Test_Context_ModeRawBytes(t *testing.T) {
+	var (
+		// Taken from Test_HexPatriciaHashed_UniqueRepresentation2
+		accounts = [][2]string{ // accountRLP taken from accountForHashing()
+			{"0x71562b71999873db5b286df957af199ec94617f7", "0xf84803843b98a783a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
+			{"0x3a220f351252089d385b29beca14e27f204c296a", "0xf84780830dbc8aa056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
+			{"0x0000000000000000000000000000000000000000", "0xf84c80881bc16d674eca1e95a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
+			{"0x1337beef00000000000000000000000000000000", "0xf84c80883782dace9d921e95a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
+		}
+		expectedHash = "920d630d52432c87f551191217322df4be72ce0dc22286f5d6dba01a99be5b4e"
+	)
+	_ = accounts
+
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	ctx := NewDeferredContext(dm, t.TempDir(), ModeRawBytes, 0, 0)
+	for _, a := range accounts {
+		addr, acc := hexutil.MustDecode(a[0]), hexutil.MustDecode(a[1])
+		ctx.PutAccount(addr, acc)
+	}
+
+	h, err := ctx.Hash()
+	require.NoError(t, err)
+	assert.Equal(t, expectedHash, hex.EncodeToString(h))
+}
