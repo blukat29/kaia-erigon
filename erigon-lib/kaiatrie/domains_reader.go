@@ -66,6 +66,9 @@ func (dr *domainsReader) DomainGetLatest(domain kv.Domain, key []byte) ([]byte, 
 }
 
 func (dr *domainsReader) Close() {
+	if dr == nil {
+		return
+	}
 	dr.tx.Rollback()
 	dr.aggTx.Close()
 }
@@ -83,22 +86,35 @@ type readWorker struct {
 	reader     DomainsReader
 }
 
-func (rw *readWorker) loop() {
-	defer rw.dm.workersWg.Done()
-	defer rw.reader.Close()
+func (worker *readWorker) reopen() error {
+	if worker.reader != nil {
+		worker.reader.Close()
+	}
 
-	for task := range rw.taskCh {
-		if rw.needReopen.Load() == 1 {
-			rw.reader.Close()
-			newReader, err := NewDomainsReader(rw.dm.db, rw.dm.agg)
-			if err != nil {
+	newReader, err := NewDomainsReader(worker.dm.db, worker.dm.agg)
+	if err != nil {
+		worker.reader = nil
+		return err
+	} else {
+		worker.reader = newReader
+		return nil
+	}
+}
+
+func (worker *readWorker) loop() {
+	for task := range worker.taskCh {
+		if worker.needReopen.Load() == 1 || worker.reader == nil {
+			worker.needReopen.Store(0)
+			if err := worker.reopen(); err != nil {
 				task.retCh <- err
 				continue
 			}
-			rw.reader = newReader
-			rw.needReopen.Store(0)
 		}
 
-		task.retCh <- task.fn(rw.reader)
+		task.retCh <- task.fn(worker.reader)
 	}
+	if worker.reader != nil {
+		worker.reader.Close()
+	}
+	worker.dm.workersWg.Done()
 }

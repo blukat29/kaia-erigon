@@ -30,6 +30,13 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+var (
+	// Abusing ReceiptDomain for custom data. This is safe because
+	// (1) ReceiptDomain is irrelevant to the state trie processing.
+	// (2) Kaia will use its own database for receipts, so ReceiptDomain not used for any purpose.
+	CustomDomain = kv.ReceiptDomain
+)
+
 // DomainsManager is a dispatcher for the operations reading from and writing to the MDBX database.
 // MDBX explicitly requires database transactions to be created and used within the same goroutine,
 // and writing transactions cannot be concurrently executed. DomainsManager is responsible for
@@ -110,14 +117,9 @@ func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, numWork
 	}
 
 	for i := 0; i < numWorkers; i++ {
-		reader, err := NewDomainsReader(dm.db, dm.agg)
-		if err != nil {
-			return nil, err
-		}
 		dm.workers[i] = &readWorker{
 			dm:     dm,
 			taskCh: dm.workersCh,
-			reader: reader,
 		}
 		dm.workersWg.Add(1)
 		go dm.workers[i].loop()
@@ -148,6 +150,9 @@ func (dm *DomainsManager) withReader_workerThread(fn func(reader DomainsReader) 
 }
 
 func (dm *DomainsManager) WithWriter(blockNum uint64, fn func(writer DomainsWriter) error) error {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
 	writer, err := NewDomainsWriter(dm.db, dm.agg, blockNum)
 	if err != nil {
 		return err
@@ -166,6 +171,9 @@ func (dm *DomainsManager) WithWriter(blockNum uint64, fn func(writer DomainsWrit
 	if err := writer.Commit(); err != nil {
 		return err
 	}
+	for _, worker := range dm.workers {
+		worker.needReopen.Store(1)
+	}
 	return nil
 }
 
@@ -182,6 +190,10 @@ func (dm *DomainsManager) Close() {
 
 func (dm *DomainsManager) StepSize() uint64 {
 	return dm.agg.StepSize()
+}
+
+func (dm *DomainsManager) Tmpdir() string {
+	return dm.dirs.Tmp
 }
 
 // Treat each block as 1 Erigon transaction.
