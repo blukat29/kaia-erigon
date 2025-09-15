@@ -21,7 +21,9 @@ import (
 	"sync"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/erigontech/erigon-lib/commitment"
 	"github.com/erigontech/erigon-lib/common/datadir"
+	"github.com/erigontech/erigon-lib/common/length"
 	"github.com/erigontech/erigon-lib/config3"
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/erigontech/erigon-lib/kv/mdbx"
@@ -52,6 +54,8 @@ type DomainsManager struct {
 	workers   []*readWorker
 	workersCh chan *readTask
 	workersWg sync.WaitGroup
+
+	hphPool sync.Pool
 }
 
 func NewTemporaryDomainsManager(dir string) (*DomainsManager, error) {
@@ -114,6 +118,10 @@ func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, numWork
 
 		workers:   make([]*readWorker, numWorkers),
 		workersCh: make(chan *readTask, numWorkers*8),
+
+		hphPool: sync.Pool{New: func() any {
+			return commitment.NewHexPatriciaHashed(length.Addr, nil, dirs.Tmp)
+		}},
 	}
 
 	for i := 0; i < numWorkers; i++ {
@@ -194,6 +202,14 @@ func (dm *DomainsManager) StepSize() uint64 {
 
 func (dm *DomainsManager) Tmpdir() string {
 	return dm.dirs.Tmp
+}
+
+func (dm *DomainsManager) GetHph() *commitment.HexPatriciaHashed {
+	return dm.hphPool.Get().(*commitment.HexPatriciaHashed)
+}
+
+func (dm *DomainsManager) ReturnHph(hph *commitment.HexPatriciaHashed) {
+	dm.hphPool.Put(hph)
 }
 
 // Treat each block as 1 Erigon transaction.
