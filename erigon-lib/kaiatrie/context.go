@@ -312,7 +312,7 @@ func (c *DeferredContext) getHphState() ([]byte, error) {
 	return hphState, nil
 }
 
-func (c *DeferredContext) Hash() ([]byte, error) {
+func (c *DeferredContext) hash(storageRootAddr []byte) ([]byte, error) {
 	hphState, err := c.getHphState()
 	if err != nil {
 		return nil, err
@@ -340,7 +340,20 @@ func (c *DeferredContext) Hash() ([]byte, error) {
 	c.lastHphState = hphState
 
 	c.tracef("ctx.Hash End rootHash=%x hash(hphState)=%x\n", rootHash, crypto.Keccak256(c.lastHphState))
-	return rootHash, nil
+
+	if len(storageRootAddr) > 0 {
+		return trie.LastStorageRootHash(storageRootAddr), nil
+	} else {
+		return rootHash, nil
+	}
+}
+
+func (c *DeferredContext) Hash() ([]byte, error) {
+	return c.hash(nil)
+}
+
+func (c *DeferredContext) StorageRootHash(storageRootAddr []byte) ([]byte, error) {
+	return c.hash(storageRootAddr)
 }
 
 // Deferred hash and commit.
