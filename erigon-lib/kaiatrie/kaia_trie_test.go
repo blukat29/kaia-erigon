@@ -315,10 +315,9 @@ func checkTrieCommit(t *testing.T, trie Trie, expectedHash string) {
 }
 
 func checkRootHash(t *testing.T, dm *DomainsManager, hash string, expectedBlockNum uint64) {
-	return
-	// h, _ := hex.DecodeString(hash)
-	// blockNum, ok, err := ReadBlockNumByRoot(dm, h)
-	// require.NoError(t, err)
-	// assert.True(t, ok)
-	// assert.Equal(t, expectedBlockNum, blockNum)
+	h, _ := hex.DecodeString(hash)
+	blockNum, ok, err := dm.ReadBlockNumByRoot(h)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, expectedBlockNum, blockNum)
 }

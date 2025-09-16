@@ -80,8 +80,13 @@ func (at *DeferredAccountTrie) Commit() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = at.ctx.Commit()
-	return h, err
+	if err := at.ctx.Commit(); err != nil {
+		return nil, err
+	}
+	if err := at.dm.WriteBlockNumByRoot(h, at.ctx.writeNum); err != nil {
+		return nil, err
+	}
+	return h, nil
 }
 
 type DeferredStorageTrie struct {

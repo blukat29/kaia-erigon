@@ -17,11 +17,13 @@ package kaiatrie
 
 import (
 	"context"
+	"encoding/binary"
 	"runtime"
 	"sync"
 
 	"github.com/c2h5oh/datasize"
 	"github.com/erigontech/erigon-lib/commitment"
+	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/common/datadir"
 	"github.com/erigontech/erigon-lib/common/length"
 	"github.com/erigontech/erigon-lib/config3"
@@ -37,6 +39,9 @@ var (
 	// (1) ReceiptDomain is irrelevant to the state trie processing.
 	// (2) Kaia will use its own database for receipts, so ReceiptDomain not used for any purpose.
 	CustomDomain = kv.ReceiptDomain
+
+	// "stateroot" || roothash => blockNum
+	keyRootPrefix = []byte("stateroot")
 )
 
 // DomainsManager is a dispatcher for the operations reading from and writing to the MDBX database.
@@ -212,8 +217,33 @@ func (dm *DomainsManager) ReturnHph(hph *commitment.HexPatriciaHashed) {
 	dm.hphPool.Put(hph)
 }
 
+func (dm *DomainsManager) ReadBlockNumByRoot(root []byte) (blockNum uint64, ok bool, err error) {
+	err = dm.WithReader(func(reader DomainsReader) error {
+		if data, _, err := reader.DomainGetLatest(CustomDomain, rootKey(root)); err != nil {
+			return err
+		} else if len(data) < 8 {
+			return nil // not found
+		} else {
+			blockNum = binary.BigEndian.Uint64(data)
+			ok = true
+			return nil
+		}
+	})
+	return
+}
+
+func (dm *DomainsManager) WriteBlockNumByRoot(root []byte, blockNum uint64) error {
+	return dm.WithWriter(blockNum, func(writer DomainsWriter) error {
+		return writer.DomainPutOrDel(CustomDomain, rootKey(root), binary.BigEndian.AppendUint64([]byte{}, blockNum))
+	})
+}
+
 // Treat each block as 1 Erigon transaction.
 // e.g. Genesis block has one tx #1, so blockNum 0 = txNum 1.
 func calcTxNum(blockNum uint64) uint64 {
 	return blockNum + 1
+}
+
+func rootKey(rootHash []byte) []byte {
+	return append(keyRootPrefix, common.BytesToHash(rootHash).Bytes()...)
 }
