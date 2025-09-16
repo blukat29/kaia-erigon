@@ -23,7 +23,6 @@ import (
 	"github.com/erigontech/erigon-lib/commitment"
 	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/common/hexutil"
-	"github.com/erigontech/erigon-lib/rlp"
 )
 
 var (
@@ -130,18 +129,6 @@ func (st *DeferredStorageTrie) Get(key []byte) ([]byte, error) {
 	return st.at.ctx.GetStorage(storageKey(st.addr, key))
 }
 
-func (st *DeferredStorageTrie) GetRLP(key []byte) ([]byte, error) {
-	value, err := st.at.ctx.GetStorage(storageKey(st.addr, key))
-	if err != nil {
-		return nil, err
-	}
-	valueRLP, err := rlp.EncodeToBytes(bytes.TrimLeft(value[:], "\x00"))
-	if err != nil {
-		return nil, fmt.Errorf("rlp encode failed: %w", err)
-	}
-	return valueRLP, nil
-}
-
 func (st *DeferredStorageTrie) Put(key []byte, value []byte) error {
 	if st.mayNeedSurrogate {
 		if acc, err := st.at.ctx.GetAccount(st.addr.Bytes()); err != nil {
@@ -157,18 +144,6 @@ func (st *DeferredStorageTrie) Put(key []byte, value []byte) error {
 
 	st.updated = true
 	st.at.ctx.PutStorage(storageKey(st.addr, key), value)
-	return nil
-}
-
-func (st *DeferredStorageTrie) PutRLP(key []byte, valueRLP []byte) error {
-	if len(valueRLP) == 0 {
-		return st.Put(key, nil)
-	}
-	_, value, _, err := rlp.Split(valueRLP)
-	if err != nil {
-		return fmt.Errorf("rlp decode failed: %w", err)
-	}
-	st.Put(key, value)
 	return nil
 }
 
