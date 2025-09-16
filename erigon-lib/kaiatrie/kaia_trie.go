@@ -62,6 +62,14 @@ func NewDeferredAccountTrie(dm *DomainsManager, blockNum uint64, writeGenesis bo
 	}
 }
 
+func (at *DeferredAccountTrie) SetTrace(trace bool) {
+	at.ctx.SetTrace(trace)
+}
+
+func (at *DeferredAccountTrie) tracef(format string, args ...any) {
+	at.ctx.tracef(format, args...)
+}
+
 func (at *DeferredAccountTrie) Get(key []byte) ([]byte, error) {
 	return at.ctx.GetAccount(key)
 }
@@ -86,6 +94,7 @@ func (at *DeferredAccountTrie) Commit() ([]byte, error) {
 	if err := at.dm.WriteBlockNumByRoot(h, at.ctx.writeNum); err != nil {
 		return nil, err
 	}
+	at.tracef("AccountTrie.Commit num=%d root=%x\n", at.ctx.writeNum, h)
 	return h, nil
 }
 
@@ -107,6 +116,14 @@ func NewDeferredStorageTrie(at *DeferredAccountTrie, addr, storageRoot []byte) *
 		updated:          false,
 		mayNeedSurrogate: true,
 	}
+}
+
+func (st *DeferredStorageTrie) SetTrace(trace bool) {
+	st.at.SetTrace(trace)
+}
+
+func (st *DeferredStorageTrie) tracef(format string, args ...any) {
+	st.at.tracef(format, args...)
 }
 
 func (st *DeferredStorageTrie) Get(key []byte) ([]byte, error) {
@@ -133,6 +150,7 @@ func (st *DeferredStorageTrie) Put(key []byte, value []byte) error {
 			// Add a surrogate account so HPH can calculate the storage root hash for this account even if
 			// the account does not exist just yet. Usually happens in contract deployment transaction's constructor().
 			st.at.ctx.PutAccount(st.addr.Bytes(), surrogateAccount(st.at.ctx.accountMode))
+			st.tracef("StorageTrie.Put installs surrogate account %x\n", st.addr)
 		}
 		st.mayNeedSurrogate = false
 	}
@@ -171,6 +189,10 @@ func (st *DeferredStorageTrie) Commit() ([]byte, error) {
 		return nil, err
 	}
 	err = st.at.ctx.Commit()
+	if err != nil {
+		return nil, err
+	}
+	st.tracef("StorageTrie.Commit addr=%x num=%d root=%x\n", st.addr, st.at.ctx.writeNum, h)
 	return h, err
 }
 
