@@ -60,11 +60,14 @@ type DeferredContext struct {
 	// Unhashed and uncommitted changes.
 	pendingUpdates *commitment.Updates
 
+	// Keeping the HPH's internal state across sync.Pool instances
+	lastHphState        []byte
+	lastStorageRootHash map[string][]byte
+
 	// Uncommitted changes.
 	pendingAccounts map[string][]byte        // addr[20] => SerialiseV3 (ModeErigonV3) or RawBytes (ModeRawBytes)
 	pendingStorages map[string][]byte        // addr[20] || slot[32] => data[32]
 	pendingBranches map[string]pendingBranch // prefix[] => data[], prevData[], prevStep
-	lastHphState    []byte
 
 	// Committed to `writeNum` changes.
 	committedAccounts map[string][]byte
@@ -80,7 +83,8 @@ func NewDeferredContext(dm *DomainsManager, tmpdir string, accountMode AccountMo
 		readNum:     readNum,
 		writeNum:    writeNum,
 
-		pendingUpdates: commitment.NewUpdates(commitment.ModeDirect, tmpdir, commitment.KeyToHexNibbleHash),
+		pendingUpdates:      commitment.NewUpdates(commitment.ModeDirect, tmpdir, commitment.KeyToHexNibbleHash),
+		lastStorageRootHash: make(map[string][]byte),
 
 		pendingAccounts: make(map[string][]byte),
 		pendingStorages: make(map[string][]byte),
@@ -325,6 +329,7 @@ func (c *DeferredContext) hash(storageRootAddr []byte) ([]byte, error) {
 	trie := c.dm.GetHph()
 	defer c.dm.ReturnHph(trie)
 	trie.ResetContext(c)
+	trie.SetLastStorageRootHashCache(c.lastStorageRootHash)
 	if err := trie.SetState(hphState); err != nil {
 		return nil, err
 	}
@@ -343,7 +348,7 @@ func (c *DeferredContext) hash(storageRootAddr []byte) ([]byte, error) {
 	c.lastHphState = hphState
 
 	if len(storageRootAddr) > 0 {
-		storageRootHash := trie.LastStorageRootHash(storageRootAddr)
+		storageRootHash := c.lastStorageRootHash[string(storageRootAddr)]
 		c.tracef("ctx.Hash End rootHash=%x addr=%x storageRootHash=%x hash(hphState)=%x\n", rootHash, storageRootAddr, storageRootHash, crypto.Keccak256(c.lastHphState))
 		return storageRootHash, nil
 	} else {

@@ -239,7 +239,7 @@ func Test_DeferredAccountTrie_Delete(t *testing.T) {
 	checkTrieHash(t, trie, hash0)
 }
 
-func Test_DeferredStorageTrie2_ModeRawBytes(t *testing.T) {
+func Test_DeferredStorageTrie(t *testing.T) {
 	var (
 		// Kairos block #505584, contract 0x9fdd7a341308e969527bd6c928068edee8399807
 		addr    = common.HexToAddress("0x9fdd7a341308e969527bd6c928068edee8399807").Bytes()
@@ -287,6 +287,52 @@ func Test_DeferredStorageTrie2_ModeRawBytes(t *testing.T) {
 		storageTrie := NewDeferredStorageTrie(accountTrie, addr, common.HexToHash(storageRoot).Bytes())
 		checkTrieGet(t, storageTrie, storage)
 	}
+}
+
+// Multiple StorageTries share one AccountTrie.
+func Test_DeferredStorageTrie_Multiple(t *testing.T) {
+	var (
+		// Kairos block #506036, contract 0x9fdd7a341308e969527bd6c928068edee8399807 and 0x54f1c1b5e44627a2f20787122fc247f076295bab
+		addr1    = common.HexToAddress("0x9fdd7a341308e969527bd6c928068edee8399807").Bytes()
+		addr2    = common.HexToAddress("0x54f1c1b5e44627a2f20787122fc247f076295bab").Bytes()
+		storage1 = [][2]string{ // addrA before the block
+			{"0x0000000000000000000000000000000000000000000000000000000000000002", "0x033b2e3c9fd0803ce8000000"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000003", "0x424820546f6b656e000000000000000000000000000000000000000000000010"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000004", "0x4248540000000000000000000000000000000000000000000000000000000006"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000005", "0xefef9fe22a5e1ae68baea7069dcb1ac607ed78cf12"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000006", "0x48daf14c857933c2036961c205ee17c6f7c33354"},
+			{"0x3eaa2d76dda4c78c477b7231cb487c2b8fa646a998125bc96085f54b529e14a6", "0x033b2e3c9fd0803ce7fffff6"},
+			{"0xc11a52e4f864538c6215b4a9b66fe25fd94c843d348673ea3db183f6f55bba00", "0x0a"},
+		}
+		storage2 = [][2]string{
+			{"0x0000000000000000000000000000000000000000000000000000000000000000", "0xefef9fe22a5e1ae68baea7069dcb1ac607ed78cf"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000001", "0x9fdd7a341308e969527bd6c928068edee8399807"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000002", "0x0a"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000003", "0x01"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000004", "0x0a"},
+		}
+		storageRoot1 = "d7526ee87d6531b58246e8feb25342735e9facf65ee952417cae99ea3c6762b2"
+		storageRoot2 = "d6aa229b05a7addf8e60d4cb72f282d347caf43d8d72635f9610817b54d29d65"
+	)
+
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	accountTrie := NewDeferredAccountTrie(dm, nil, 0, true)
+	storageTrie1 := NewDeferredStorageTrie(accountTrie, addr1, nil)
+	storageTrie2 := NewDeferredStorageTrie(accountTrie, addr2, nil)
+
+	for _, s := range storage1 {
+		k, v := hexutil.MustDecode(s[0]), hexutil.MustDecode(s[1])
+		storageTrie1.Put(k, v)
+	}
+	for _, s := range storage2 {
+		k, v := hexutil.MustDecode(s[0]), hexutil.MustDecode(s[1])
+		storageTrie2.Put(k, v)
+	}
+	checkTrieHash(t, storageTrie1, storageRoot1)
+	checkTrieHash(t, storageTrie2, storageRoot2)
 }
 
 func checkTrieGet(t *testing.T, trie Trie, items [][2]string) {

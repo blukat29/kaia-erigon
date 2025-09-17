@@ -2165,6 +2165,12 @@ func (hph *HexPatriciaHashed) Process(ctx context.Context, updates *Updates, log
 	return rootHash, nil
 }
 
+// Set the location to store the last storage root hash
+func (hph *HexPatriciaHashed) SetLastStorageRootHashCache(m map[string][]byte) {
+	hph.lastStorageRootHashes = m
+}
+
+// Store the last storage root hash whenever it is computed
 func (hph *HexPatriciaHashed) setLastStorageRootHash(addr [length.Addr]byte, storageRoot [length.Hash]byte) {
 	if hph.trace {
 		fmt.Printf("lastStorageRootHash account %x storageRoot %x\n", addr[:], storageRoot[:])
@@ -2188,7 +2194,6 @@ func (hph *HexPatriciaHashed) Reset() {
 	hph.rootTouched = false
 	hph.rootChecked = false
 	hph.rootPresent = true
-	hph.lastStorageRootHashes = make(map[string][]byte)
 }
 
 func (hph *HexPatriciaHashed) ResetContext(ctx PatriciaContext) {
