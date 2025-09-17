@@ -307,8 +307,6 @@ func (c *DeferredContext) getHphState() ([]byte, error) {
 	if blockNum != c.readNum {
 		return nil, fmt.Errorf("%w: requested=%d stored=%d", errNotLatest, c.readNum, blockNum)
 	}
-
-	c.tracef("ctx.getHphState requested=%d stored=%d hash(hphState)=%x\n", blockNum, c.readNum, crypto.Keccak256(hphState))
 	return hphState, nil
 }
 
@@ -317,7 +315,12 @@ func (c *DeferredContext) hash(storageRootAddr []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.tracef("ctx.Hash Begin len(updates)=%d, hash(hphState)=%x\n", c.pendingUpdates.Size(), crypto.Keccak256(hphState))
+
+	if len(storageRootAddr) > 0 {
+		c.tracef("ctx.Hash Begin len(updates)=%d addr=%x hash(hphState)=%x\n", c.pendingUpdates.Size(), storageRootAddr, crypto.Keccak256(hphState))
+	} else {
+		c.tracef("ctx.Hash Begin len(updates)=%d hash(hphState)=%x\n", c.pendingUpdates.Size(), crypto.Keccak256(hphState))
+	}
 
 	trie := c.dm.GetHph()
 	defer c.dm.ReturnHph(trie)
@@ -339,11 +342,12 @@ func (c *DeferredContext) hash(storageRootAddr []byte) ([]byte, error) {
 	}
 	c.lastHphState = hphState
 
-	c.tracef("ctx.Hash End rootHash=%x hash(hphState)=%x\n", rootHash, crypto.Keccak256(c.lastHphState))
-
 	if len(storageRootAddr) > 0 {
-		return trie.LastStorageRootHash(storageRootAddr), nil
+		storageRootHash := trie.LastStorageRootHash(storageRootAddr)
+		c.tracef("ctx.Hash End rootHash=%x addr=%x storageRootHash=%x hash(hphState)=%x\n", rootHash, storageRootAddr, storageRootHash, crypto.Keccak256(c.lastHphState))
+		return storageRootHash, nil
 	} else {
+		c.tracef("ctx.Hash End rootHash=%x hash(hphState)=%x\n", rootHash, crypto.Keccak256(c.lastHphState))
 		return rootHash, nil
 	}
 }

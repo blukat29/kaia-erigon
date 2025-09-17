@@ -42,10 +42,13 @@ type Trie interface {
 type DeferredAccountTrie struct {
 	dm  *DomainsManager
 	ctx *DeferredContext
+
+	lastRoot common.Hash
+	needHash bool
 }
 
 // Creates an account trie that begins with the given block number.
-func NewDeferredAccountTrie(dm *DomainsManager, blockNum uint64, writeGenesis bool) *DeferredAccountTrie {
+func NewDeferredAccountTrie(dm *DomainsManager, stateRoot []byte, blockNum uint64, writeGenesis bool) *DeferredAccountTrie {
 	var roNum, rwNum uint64
 	if writeGenesis {
 		roNum = 0
@@ -56,8 +59,10 @@ func NewDeferredAccountTrie(dm *DomainsManager, blockNum uint64, writeGenesis bo
 	}
 	ctx := NewDeferredContext(dm, dm.Tmpdir(), ModeRawBytes, roNum, rwNum)
 	return &DeferredAccountTrie{
-		dm:  dm,
-		ctx: ctx,
+		dm:       dm,
+		ctx:      ctx,
+		lastRoot: normalizeRootHash(stateRoot),
+		needHash: false,
 	}
 }
 
@@ -74,12 +79,23 @@ func (at *DeferredAccountTrie) Get(key []byte) ([]byte, error) {
 }
 
 func (at *DeferredAccountTrie) Put(key []byte, value []byte) error {
+	at.needHash = true
 	at.ctx.PutAccount(key, value)
 	return nil
 }
 
 func (at *DeferredAccountTrie) Hash() ([]byte, error) {
-	return at.ctx.Hash()
+	if !at.needHash {
+		return at.lastRoot[:], nil
+	}
+
+	h, err := at.ctx.Hash()
+	if err != nil {
+		return nil, err
+	}
+	at.lastRoot = common.BytesToHash(h)
+	at.needHash = false
+	return h, nil
 }
 
 func (at *DeferredAccountTrie) Commit() ([]byte, error) {
@@ -101,8 +117,8 @@ type DeferredStorageTrie struct {
 	at   *DeferredAccountTrie
 	addr common.Address
 
-	initialRoot      common.Hash
-	updated          bool
+	lastRoot         common.Hash
+	needHash         bool
 	mayNeedSurrogate bool
 }
 
@@ -111,8 +127,8 @@ func NewDeferredStorageTrie(at *DeferredAccountTrie, addr, storageRoot []byte) *
 		at:   at,
 		addr: common.BytesToAddress(addr),
 
-		initialRoot:      normalizeRootHash(storageRoot),
-		updated:          false,
+		lastRoot:         normalizeRootHash(storageRoot),
+		needHash:         false,
 		mayNeedSurrogate: true,
 	}
 }
@@ -142,19 +158,22 @@ func (st *DeferredStorageTrie) Put(key []byte, value []byte) error {
 		st.mayNeedSurrogate = false
 	}
 
-	st.updated = true
+	st.needHash = true
 	st.at.ctx.PutStorage(storageKey(st.addr, key), value)
 	return nil
 }
 
 func (st *DeferredStorageTrie) Hash() ([]byte, error) {
-	if !st.updated {
-		return st.initialRoot[:], nil
+	if !st.needHash {
+		return st.lastRoot[:], nil
 	}
+
 	h, err := st.at.ctx.StorageRootHash(st.addr.Bytes())
 	if len(h) == 0 {
 		return nil, fmt.Errorf("%w: addr=%x", errNoStorageRoot, st.addr)
 	}
+	st.lastRoot = common.BytesToHash(h)
+	st.needHash = false
 	return h, err
 }
 

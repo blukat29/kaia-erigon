@@ -39,11 +39,11 @@ func Test_DeferredAccountTrie(t *testing.T) {
 			"be751ffacf5fcf9998d4f90b87164ff95166d55e445c8d27cfecbe0e67a032b6",
 			"60e8f25e2fb479e625347c1f11e2f07c9cd7d0a5320013294d89281b6fceed4f",
 		}
-		// roots = [][]byte{
-		// 	common.HexToHash(expectedHashes[0]).Bytes(),
-		// 	common.HexToHash(expectedHashes[1]).Bytes(),
-		// 	common.HexToHash(expectedHashes[2]).Bytes(),
-		// }
+		roots = [][]byte{
+			common.HexToHash(expectedHashes[0]).Bytes(),
+			common.HexToHash(expectedHashes[1]).Bytes(),
+			common.HexToHash(expectedHashes[2]).Bytes(),
+		}
 	)
 
 	dm, err := NewTemporaryDomainsManager(t.TempDir())
@@ -52,7 +52,7 @@ func Test_DeferredAccountTrie(t *testing.T) {
 
 	{
 		t.Log("Commit block #0 (genesis)")
-		trie := NewDeferredAccountTrie(dm, 0, true) // start from block 0, commit to 0 (genesis)
+		trie := NewDeferredAccountTrie(dm, nil, 0, true) // start from block 0, commit to 0 (genesis)
 		checkTrieHash(t, trie, hex.EncodeToString(commitment.EmptyRootHash))
 		require.NoError(t, trie.Put(hexutil.MustDecode(accounts[0][0]), hexutil.MustDecode(accounts[0][1])))
 		checkTrieCommit(t, trie, expectedHashes[0])
@@ -60,7 +60,7 @@ func Test_DeferredAccountTrie(t *testing.T) {
 	}
 	{
 		t.Log("Commit block #1")
-		trie := NewDeferredAccountTrie(dm, 0, false) // start from block 0, commit to 1
+		trie := NewDeferredAccountTrie(dm, roots[0], 0, false) // start from block 0, commit to 1
 		checkTrieHash(t, trie, expectedHashes[0])
 		require.NoError(t, trie.Put(hexutil.MustDecode(accounts[1][0]), hexutil.MustDecode(accounts[1][1])))
 		checkTrieCommit(t, trie, expectedHashes[1])
@@ -69,7 +69,7 @@ func Test_DeferredAccountTrie(t *testing.T) {
 	}
 	{
 		t.Log("Commit block #2")
-		trie := NewDeferredAccountTrie(dm, 1, false) // start from block 1, commit to 2
+		trie := NewDeferredAccountTrie(dm, roots[1], 1, false) // start from block 1, commit to 2
 		checkTrieHash(t, trie, expectedHashes[1])
 		require.NoError(t, trie.Put(hexutil.MustDecode(accounts[2][0]), hexutil.MustDecode(accounts[2][1])))
 		checkTrieCommit(t, trie, expectedHashes[2])
@@ -203,7 +203,7 @@ func Test_DeferredAccountTrie_Examples(t *testing.T) {
 		require.NoError(t, err)
 		defer dm.Close()
 
-		trie := NewDeferredAccountTrie(dm, 0, true)
+		trie := NewDeferredAccountTrie(dm, nil, 0, true)
 		for _, acc := range tc.accounts {
 			addr, acc := hexutil.MustDecode(acc[0]), hexutil.MustDecode(acc[1])
 			require.NoError(t, trie.Put(addr, acc))
@@ -225,16 +225,16 @@ func Test_DeferredAccountTrie_Delete(t *testing.T) {
 	defer dm.Close()
 
 	// Empty hash at block 0
-	trie := NewDeferredAccountTrie(dm, 0, true)
+	trie := NewDeferredAccountTrie(dm, nil, 0, true)
 	checkTrieHash(t, trie, hash0)
 
 	// Nonempty hash at block 1
-	trie = NewDeferredAccountTrie(dm, 1, true)
+	trie = NewDeferredAccountTrie(dm, common.HexToHash(hash0).Bytes(), 1, true)
 	require.NoError(t, trie.Put(addr, acc))
 	checkTrieHash(t, trie, hash1)
 
 	// Back to empty hash at block 2
-	trie = NewDeferredAccountTrie(dm, 2, true)
+	trie = NewDeferredAccountTrie(dm, common.HexToHash(hash1).Bytes(), 2, true)
 	require.NoError(t, trie.Put(addr, nil))
 	checkTrieHash(t, trie, hash0)
 }
@@ -265,7 +265,7 @@ func Test_DeferredStorageTrie2_ModeRawBytes(t *testing.T) {
 
 	{
 		t.Log("Commit storage and account")
-		accountTrie := NewDeferredAccountTrie(dm, 0, true)
+		accountTrie := NewDeferredAccountTrie(dm, nil, 0, true)
 		storageTrie := NewDeferredStorageTrie(accountTrie, addr, nil)
 
 		for _, s := range storage {
@@ -279,7 +279,7 @@ func Test_DeferredStorageTrie2_ModeRawBytes(t *testing.T) {
 	}
 	{
 		t.Log("Inspect account and storage tries")
-		accountTrie := NewDeferredAccountTrie(dm, 0, false)
+		accountTrie := NewDeferredAccountTrie(dm, nil, 0, false)
 		acc, err := accountTrie.Get(addr)
 		require.NoError(t, err)
 		require.Equal(t, hexutil.MustDecode(accountRLP), acc)
