@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/erigontech/erigon-lib/commitment"
 	"github.com/erigontech/erigon-lib/crypto"
@@ -32,6 +33,8 @@ var (
 
 	keyHphState  = []byte("hphstate")
 	errNotLatest = errors.New("cannot operate on non-latest commitment state")
+
+	traceId atomic.Uint32 // To distinguish different instances of DeferredContext
 )
 
 type AccountMode uint8
@@ -56,6 +59,7 @@ type DeferredContext struct {
 	readNum     uint64 // block number to read from
 	writeNum    uint64 // block number to write to
 	trace       bool
+	traceId     uint32
 
 	// Unhashed and uncommitted changes.
 	pendingUpdates *commitment.Updates
@@ -82,6 +86,7 @@ func NewDeferredContext(dm *DomainsManager, tmpdir string, accountMode AccountMo
 		accountMode: accountMode,
 		readNum:     readNum,
 		writeNum:    writeNum,
+		traceId:     traceId.Add(1),
 
 		pendingUpdates:      commitment.NewUpdates(commitment.ModeDirect, tmpdir, commitment.KeyToHexNibbleHash),
 		lastStorageRootHash: make(map[string][]byte),
@@ -106,7 +111,8 @@ func (dc *DeferredContext) SetReadNum(readNum uint64) {
 
 func (c *DeferredContext) tracef(format string, args ...any) {
 	if c.trace {
-		fmt.Printf(format, args...)
+		msg := fmt.Sprintf(format, args...)
+		fmt.Printf("[%10d] %s", c.traceId, msg)
 	}
 }
 
