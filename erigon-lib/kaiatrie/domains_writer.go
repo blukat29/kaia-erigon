@@ -62,7 +62,7 @@ type domainsWriter struct {
 	writers [kv.DomainLen]bufferedWriter
 }
 
-func NewDomainsWriter(db kv.RwDB, agg *state.Aggregator, blockNum uint64) (DomainsWriter, error) {
+func NewDomainsWriter(db kv.RwDB, agg *state.Aggregator) (DomainsWriter, error) {
 	tx, err := db.BeginRw(context.Background())
 	if err != nil {
 		return nil, err
@@ -76,7 +76,6 @@ func NewDomainsWriter(db kv.RwDB, agg *state.Aggregator, blockNum uint64) (Domai
 	}
 	for i := range kv.DomainLen {
 		dw.writers[i] = aggTx.NewWriter(i)
-		dw.writers[i].SetTxNum(calcTxNum(blockNum))
 	}
 
 	return dw, nil

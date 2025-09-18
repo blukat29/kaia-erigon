@@ -53,13 +53,16 @@ type DomainsManager struct {
 	dirs   datadir.Dirs
 	logger log.Logger
 
+	// Underlying database
 	db  kv.RwDB
 	agg *state.Aggregator
 
+	// DomainsReader pool
 	workers   []*readWorker
 	workersCh chan *readTask
 	workersWg sync.WaitGroup
 
+	// HexPatriciaHashed pool
 	hphPool sync.Pool
 }
 
@@ -166,7 +169,7 @@ func (dm *DomainsManager) WithWriter(blockNum uint64, fn func(writer DomainsWrit
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
-	writer, err := NewDomainsWriter(dm.db, dm.agg, blockNum)
+	writer, err := NewDomainsWriter(dm.db, dm.agg)
 	if err != nil {
 		return err
 	}
