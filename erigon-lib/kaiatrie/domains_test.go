@@ -16,6 +16,8 @@
 package kaiatrie
 
 import (
+	"math/big"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -156,7 +158,7 @@ func checkIt(t *testing.T, it DomainsIterator, items [][2]string) {
 	assert.Nil(t, value)
 }
 
-func Benchmark_DomainsRo(b *testing.B) {
+func Benchmark_Reader(b *testing.B) {
 	dm, err := NewTemporaryDomainsManager(b.TempDir())
 	require.NoError(b, err)
 	defer dm.Close()
@@ -197,5 +199,55 @@ func Benchmark_DomainsRo(b *testing.B) {
 				return nil
 			})
 		}
+	})
+}
+
+func Benchmark_Writer(b *testing.B) {
+	putItems := func(writer DomainsWriter, num, count int) {
+		for i := range count {
+			n := int64(num*1000 + i)
+			k := common.BigToAddress(big.NewInt(n)).Bytes()
+			v := common.BigToHash(big.NewInt(n)).Bytes()
+			writer.DomainPutOrDel(CustomDomain, k, v)
+		}
+	}
+
+	b.Run("open RwTx every block", func(b *testing.B) {
+		dm, err := NewDomainsManager(b.TempDir(), log.Root())
+		require.NoError(b, err)
+		defer dm.Close()
+
+		for i := 0; i < b.N; i++ {
+			writer, _ := NewDomainsWriter(dm.db, dm.agg, uint64(i))
+			writer.SetBlockNum(uint64(i))
+			putItems(writer, i, 10)
+			writer.WriteBlockNum(uint64(i))
+			writer.Commit()
+		}
+
+		out, _ := exec.Command("du", "-sh", dm.dirs.DataDir).Output()
+		b.Logf("N=%d datadir=%s", b.N, out)
+	})
+
+	b.Run("reuse RwTx", func(b *testing.B) {
+		dm, err := NewDomainsManager(b.TempDir(), log.Root())
+		require.NoError(b, err)
+		defer dm.Close()
+
+		writer, _ := NewDomainsWriter(dm.db, dm.agg, 0)
+		for i := 0; i < b.N; i++ {
+			writer.SetBlockNum(uint64(i))
+			putItems(writer, i, 10)
+			writer.WriteBlockNum(uint64(i))
+			// periodically commit and reopen
+			if i%128 == 127 {
+				writer.Commit()
+				writer, _ = NewDomainsWriter(dm.db, dm.agg, 0)
+			}
+		}
+		writer.Commit()
+
+		out, _ := exec.Command("du", "-sh", dm.dirs.DataDir).Output()
+		b.Logf("N=%d datadir=%s", b.N, out)
 	})
 }
