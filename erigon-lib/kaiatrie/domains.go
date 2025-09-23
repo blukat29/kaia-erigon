@@ -57,10 +57,13 @@ type DomainsManager struct {
 	db  kv.RwDB
 	agg *state.Aggregator
 
-	// DomainsReader pool
+	// DomainsReader shared pool
 	workers   []*readWorker
 	workersCh chan *readTask
 	workersWg sync.WaitGroup
+
+	// DomainsWriter shared instance
+	writeBuffer *DomainsWriteBuffer
 
 	// HexPatriciaHashed pool
 	hphPool sync.Pool
@@ -127,11 +130,14 @@ func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, numWork
 		workers:   make([]*readWorker, numWorkers),
 		workersCh: make(chan *readTask, numWorkers*8),
 
+		writeBuffer: NewDomainsWriteBuffer(),
+
 		hphPool: sync.Pool{New: func() any {
 			return commitment.NewHexPatriciaHashed(length.Addr, nil, dirs.Tmp)
 		}},
 	}
 
+	// Launch DomainReader workers
 	for i := 0; i < numWorkers; i++ {
 		dm.workers[i] = &readWorker{
 			dm:     dm,
@@ -169,12 +175,13 @@ func (dm *DomainsManager) WithWriter(blockNum uint64, fn func(writer DomainsWrit
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
-	writer, err := NewDomainsWriter(dm.db, dm.agg)
+	writer, err := NewDomainsWriter(dm.db, dm.agg, dm.writeBuffer)
 	if err != nil {
 		return err
 	}
 	defer writer.Close()
 
+	dm.writeBuffer.SetTxNum(calcTxNum(blockNum))
 	if err := writer.SetBlockNum(blockNum); err != nil {
 		return err
 	}
@@ -187,6 +194,7 @@ func (dm *DomainsManager) WithWriter(blockNum uint64, fn func(writer DomainsWrit
 	if err := writer.Commit(); err != nil {
 		return err
 	}
+	dm.writeBuffer.Clear()
 	for _, worker := range dm.workers {
 		worker.needReopen.Store(1)
 	}

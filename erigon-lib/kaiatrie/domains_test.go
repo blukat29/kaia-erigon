@@ -218,7 +218,7 @@ func Benchmark_Writer(b *testing.B) {
 		defer dm.Close()
 
 		for i := 0; i < b.N; i++ {
-			writer, _ := NewDomainsWriter(dm.db, dm.agg)
+			writer, _ := NewDomainsWriter(dm.db, dm.agg, NewDomainsWriteBuffer())
 			writer.SetBlockNum(uint64(i))
 			putItems(writer, i, 10)
 			writer.WriteBlockNum(uint64(i))
@@ -234,7 +234,7 @@ func Benchmark_Writer(b *testing.B) {
 		require.NoError(b, err)
 		defer dm.Close()
 
-		writer, _ := NewDomainsWriter(dm.db, dm.agg)
+		writer, _ := NewDomainsWriter(dm.db, dm.agg, NewDomainsWriteBuffer())
 		for i := 0; i < b.N; i++ {
 			writer.SetBlockNum(uint64(i))
 			putItems(writer, i, 10)
@@ -242,7 +242,7 @@ func Benchmark_Writer(b *testing.B) {
 			// periodically commit and reopen
 			if i%128 == 127 {
 				writer.Commit()
-				writer, _ = NewDomainsWriter(dm.db, dm.agg)
+				writer, _ = NewDomainsWriter(dm.db, dm.agg, NewDomainsWriteBuffer())
 			}
 		}
 		writer.Commit()

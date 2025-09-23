@@ -59,10 +59,11 @@ type bufferedWriter interface {
 type domainsWriter struct {
 	tx      kv.RwTx
 	aggTx   *state.AggregatorRoTx
+	buf     *DomainsWriteBuffer
 	writers [kv.DomainLen]bufferedWriter
 }
 
-func NewDomainsWriter(db kv.RwDB, agg *state.Aggregator) (DomainsWriter, error) {
+func NewDomainsWriter(db kv.RwDB, agg *state.Aggregator, buf *DomainsWriteBuffer) (DomainsWriter, error) {
 	tx, err := db.BeginRw(context.Background())
 	if err != nil {
 		return nil, err
@@ -73,6 +74,7 @@ func NewDomainsWriter(db kv.RwDB, agg *state.Aggregator) (DomainsWriter, error) 
 	dw := &domainsWriter{
 		tx:    tx,
 		aggTx: aggTx,
+		buf:   buf,
 	}
 	for i := range kv.DomainLen {
 		dw.writers[i] = aggTx.NewWriter(i)
@@ -82,7 +84,10 @@ func NewDomainsWriter(db kv.RwDB, agg *state.Aggregator) (DomainsWriter, error) 
 }
 
 func (dw *domainsWriter) DomainGetAsOf(domain kv.Domain, key []byte, blockNum uint64) ([]byte, error) {
-	v, _, err := dw.aggTx.GetAsOf(dw.tx, domain, key, calcTxNum(blockNum)+1)
+	if v, ok := dw.buf.GetAsOf(domain, key, calcTxNum(blockNum)); ok { // not flushed
+		return v, nil
+	}
+	v, _, err := dw.aggTx.GetAsOf(dw.tx, domain, key, calcTxNum(blockNum)+1) // flushed
 	return v, err
 }
 
@@ -96,6 +101,9 @@ func (dw *domainsWriter) DomainPutOrDel(domain kv.Domain, key []byte, value []by
 	if err != nil {
 		return err
 	}
+
+	dw.buf.Put(domain, key, value)
+
 	if value == nil {
 		return dw.writers[domain].DeleteWithPrev(key, nil, prev, prevStep)
 	} else {

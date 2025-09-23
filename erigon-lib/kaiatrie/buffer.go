@@ -37,22 +37,26 @@ func NewWriteBuffer(keyLen int) *WriteBuffer {
 	}
 }
 
-func (wb *WriteBuffer) SetTxNum(txNum uint64) {
-	wb.txNum = txNum
+func (b *WriteBuffer) SetTxNum(txNum uint64) {
+	b.txNum = txNum
 }
 
-func (wb *WriteBuffer) Put(key, value []byte) {
-	wb.m.Set(wb.makeBufferKey(key, wb.txNum), value)
+func (b *WriteBuffer) Clear() {
+	b.m.Clear()
 }
 
-func (wb *WriteBuffer) GetAsOf(key []byte, txNum uint64) ([]byte, bool) {
+func (b *WriteBuffer) Put(key, value []byte) {
+	b.m.Set(b.makeBufferKey(key, b.txNum), value)
+}
+
+func (b *WriteBuffer) GetAsOf(key []byte, txNum uint64) ([]byte, bool) {
 	var (
-		bottomKey = wb.makeBufferKey(key, 0)
-		searchKey = wb.makeBufferKey(key, txNum)
+		bottomKey = b.makeBufferKey(key, 0)
+		searchKey = b.makeBufferKey(key, txNum)
 		result    = []byte(nil)
 		ok        = false
 	)
-	wb.m.Descend(searchKey, func(iterKey string, value []byte) bool {
+	b.m.Descend(searchKey, func(iterKey string, value []byte) bool {
 		if strings.Compare(bottomKey, iterKey) <= 0 {
 			result = value
 			ok = true
@@ -62,14 +66,14 @@ func (wb *WriteBuffer) GetAsOf(key []byte, txNum uint64) ([]byte, bool) {
 	return result, ok
 }
 
-func (wb *WriteBuffer) makeBufferKey(key []byte, txNum uint64) string {
-	buf := make([]byte, wb.keyLen+8)
-	if wb.keyLen <= len(key) {
-		copy(buf, key[:wb.keyLen])
+func (b *WriteBuffer) makeBufferKey(key []byte, txNum uint64) string {
+	buf := make([]byte, b.keyLen+8)
+	if b.keyLen <= len(key) {
+		copy(buf, key[:b.keyLen])
 	} else {
 		copy(buf, key)
 	}
-	binary.BigEndian.PutUint64(buf[wb.keyLen:], txNum)
+	binary.BigEndian.PutUint64(buf[b.keyLen:], txNum)
 	return string(buf)
 }
 
@@ -90,23 +94,31 @@ func NewDomainsWriteBuffer() *DomainsWriteBuffer {
 	}
 }
 
-func (dwb *DomainsWriteBuffer) SetTxNum(txNum uint64) {
-	for _, buffer := range dwb.buffers {
-		if buffer != nil {
-			buffer.SetTxNum(txNum)
+func (buf *DomainsWriteBuffer) SetTxNum(txNum uint64) {
+	for _, b := range buf.buffers {
+		if b != nil {
+			b.SetTxNum(txNum)
 		}
 	}
 }
 
-func (dwb *DomainsWriteBuffer) Put(domain kv.Domain, key, value []byte) {
-	if dwb.buffers[domain] != nil {
-		dwb.buffers[domain].Put(key, value)
+func (buf *DomainsWriteBuffer) Put(domain kv.Domain, key, value []byte) {
+	if buf.buffers[domain] != nil {
+		buf.buffers[domain].Put(key, value)
 	}
 }
 
-func (dwb *DomainsWriteBuffer) GetAsOf(domain kv.Domain, key []byte, txNum uint64) ([]byte, bool) {
-	if dwb.buffers[domain] != nil {
-		return dwb.buffers[domain].GetAsOf(key, txNum)
+func (buf *DomainsWriteBuffer) GetAsOf(domain kv.Domain, key []byte, txNum uint64) ([]byte, bool) {
+	if buf.buffers[domain] != nil {
+		return buf.buffers[domain].GetAsOf(key, txNum)
 	}
 	return nil, false
+}
+
+func (buf *DomainsWriteBuffer) Clear() {
+	for _, b := range buf.buffers {
+		if b != nil {
+			b.Clear()
+		}
+	}
 }
