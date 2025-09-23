@@ -57,13 +57,17 @@ type DomainsManager struct {
 	db  kv.RwDB
 	agg *state.Aggregator
 
-	// DomainsReader shared pool
-	workers   []*readWorker
-	workersCh chan *readTask
-	workersWg sync.WaitGroup
-
-	// DomainsWriter shared instance
+	// Because MDBX transactions must be created and used within the same goroutine,
+	// we use dedicated reader and writer goroutines that process DB requests.
+	// Shared between readers and writers
+	wg          sync.WaitGroup
 	writeBuffer *DomainsWriteBuffer
+
+	// DomainsReader pool
+	readers   []*readWorker
+	readersCh chan *readTask
+
+	// DomainsWriter instance
 
 	// HexPatriciaHashed pool
 	hphPool sync.Pool
@@ -127,8 +131,8 @@ func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, numWork
 		db:     db,
 		agg:    agg,
 
-		workers:   make([]*readWorker, numWorkers),
-		workersCh: make(chan *readTask, numWorkers*8),
+		readers:   make([]*readWorker, numWorkers),
+		readersCh: make(chan *readTask, numWorkers*8),
 
 		writeBuffer: NewDomainsWriteBuffer(),
 
@@ -137,16 +141,22 @@ func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, numWork
 		}},
 	}
 
-	// Launch DomainReader workers
-	for i := 0; i < numWorkers; i++ {
-		dm.workers[i] = &readWorker{
-			dm:     dm,
-			taskCh: dm.workersCh,
-		}
-		dm.workersWg.Add(1)
-		go dm.workers[i].loop()
-	}
+	dm.startReadWorkers(numWorkers)
 	return dm, nil
+}
+
+func (dm *DomainsManager) startReadWorkers(numWorkers int) {
+	for i := 0; i < numWorkers; i++ {
+		dm.readers[i] = &readWorker{
+			dm:     dm,
+			taskCh: dm.readersCh,
+		}
+		dm.wg.Add(1)
+		go func() {
+			dm.readers[i].loop()
+			dm.wg.Done()
+		}()
+	}
 }
 
 func (dm *DomainsManager) WithReader(fn func(reader DomainsReader) error) error {
@@ -167,7 +177,7 @@ func (dm *DomainsManager) withReader_workerThread(fn func(reader DomainsReader) 
 		fn:    fn,
 		retCh: make(chan error),
 	}
-	dm.workersCh <- task
+	dm.readersCh <- task
 	return <-task.retCh
 }
 
@@ -195,7 +205,7 @@ func (dm *DomainsManager) WithWriter(blockNum uint64, fn func(writer DomainsWrit
 		return err
 	}
 	dm.writeBuffer.Clear()
-	for _, worker := range dm.workers {
+	for _, worker := range dm.readers {
 		worker.needReopen.Store(1)
 	}
 	return nil
@@ -205,8 +215,8 @@ func (dm *DomainsManager) Close() {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
-	close(dm.workersCh)
-	dm.workersWg.Wait()
+	close(dm.readersCh)
+	dm.wg.Wait()
 
 	dm.agg.Close()
 	dm.db.Close()

@@ -116,5 +116,4 @@ func (worker *readWorker) loop() {
 	if worker.reader != nil {
 		worker.reader.Close()
 	}
-	worker.dm.workersWg.Done()
 }
