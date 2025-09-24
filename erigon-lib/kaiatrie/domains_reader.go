@@ -86,6 +86,10 @@ type readWorker struct {
 	reader     DomainsReader
 }
 
+func NewReadWorker(dm *DomainsManager, taskCh chan *readTask) *readWorker {
+	return &readWorker{dm: dm, taskCh: taskCh}
+}
+
 func (worker *readWorker) reopen() error {
 	if worker.reader != nil {
 		worker.reader.Close()

@@ -45,7 +45,7 @@ func Test_DomainsManager_BlockNums(t *testing.T) {
 	assert.NoError(t, dm.WithWriter(2, noop))
 
 	// Cannot commit a block less than last block.
-	assert.ErrorIs(t, dm.WithWriter(1, noop), errCommitBlockTooLow)
+	assert.ErrorIs(t, dm.withWriter_workerThread(1, noop), errCommitBlockTooLow)
 	// Cannot commit a block with a gap from the last block.
 	assert.ErrorIs(t, dm.WithWriter(4, noop), errCommitBlockTooHigh)
 

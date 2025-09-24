@@ -59,6 +59,7 @@ type DomainsManager struct {
 
 	// Because MDBX transactions must be created and used within the same goroutine,
 	// we use dedicated reader and writer goroutines that process DB requests.
+
 	// Shared between readers and writers
 	wg          sync.WaitGroup
 	writeBuffer *DomainsWriteBuffer
@@ -68,8 +69,10 @@ type DomainsManager struct {
 	readersCh chan *readTask
 
 	// DomainsWriter instance
+	writer   *writeWorker
+	writerCh chan *writeTask
 
-	// HexPatriciaHashed pool
+	// Minimize memory allocation
 	hphPool sync.Pool
 }
 
@@ -134,6 +137,8 @@ func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, numWork
 		readers:   make([]*readWorker, numWorkers),
 		readersCh: make(chan *readTask, numWorkers*8),
 
+		writerCh: make(chan *writeTask, 1),
+
 		writeBuffer: NewDomainsWriteBuffer(),
 
 		hphPool: sync.Pool{New: func() any {
@@ -142,21 +147,28 @@ func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, numWork
 	}
 
 	dm.startReadWorkers(numWorkers)
+	dm.startWriteWorker()
 	return dm, nil
 }
 
 func (dm *DomainsManager) startReadWorkers(numWorkers int) {
 	for i := 0; i < numWorkers; i++ {
-		dm.readers[i] = &readWorker{
-			dm:     dm,
-			taskCh: dm.readersCh,
-		}
+		dm.readers[i] = NewReadWorker(dm, dm.readersCh)
 		dm.wg.Add(1)
 		go func() {
 			dm.readers[i].loop()
 			dm.wg.Done()
 		}()
 	}
+}
+
+func (dm *DomainsManager) startWriteWorker() {
+	dm.writer = NewWriteWorker(dm, dm.writerCh)
+	dm.wg.Add(1)
+	go func() {
+		dm.writer.loop()
+		dm.wg.Done()
+	}()
 }
 
 func (dm *DomainsManager) WithReader(fn func(reader DomainsReader) error) error {
@@ -182,6 +194,10 @@ func (dm *DomainsManager) withReader_workerThread(fn func(reader DomainsReader) 
 }
 
 func (dm *DomainsManager) WithWriter(blockNum uint64, fn func(writer DomainsWriter) error) error {
+	return dm.withWriter_workerThread(blockNum, fn)
+}
+
+func (dm *DomainsManager) withWriter_callerThread(blockNum uint64, fn func(writer DomainsWriter) error) error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
@@ -191,7 +207,6 @@ func (dm *DomainsManager) WithWriter(blockNum uint64, fn func(writer DomainsWrit
 	}
 	defer writer.Close()
 
-	dm.writeBuffer.SetTxNum(calcTxNum(blockNum))
 	if err := writer.SetBlockNum(blockNum); err != nil {
 		return err
 	}
@@ -204,11 +219,21 @@ func (dm *DomainsManager) WithWriter(blockNum uint64, fn func(writer DomainsWrit
 	if err := writer.Commit(); err != nil {
 		return err
 	}
-	dm.writeBuffer.Clear()
 	for _, worker := range dm.readers {
 		worker.needReopen.Store(1)
 	}
 	return nil
+}
+
+func (dm *DomainsManager) withWriter_workerThread(blockNum uint64, fn func(writer DomainsWriter) error) error {
+	task := &writeTask{
+		blockNum: blockNum,
+		fn:       fn,
+		retCh:    make(chan error),
+	}
+	dm.writerCh <- task
+	res := <-task.retCh
+	return res
 }
 
 func (dm *DomainsManager) Close() {
@@ -216,6 +241,7 @@ func (dm *DomainsManager) Close() {
 	defer dm.mu.Unlock()
 
 	close(dm.readersCh)
+	close(dm.writerCh)
 	dm.wg.Wait()
 
 	dm.agg.Close()

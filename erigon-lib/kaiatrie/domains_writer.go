@@ -130,6 +130,7 @@ func (dw *domainsWriter) SetBlockNum(blockNum uint64) error {
 	for i := range kv.DomainLen {
 		dw.writers[i].SetTxNum(txNum)
 	}
+	dw.buf.SetTxNum(txNum)
 	return nil
 }
 
@@ -157,6 +158,7 @@ func (dw *domainsWriter) Close() {
 	}
 	dw.aggTx.Close()
 	dw.tx.Rollback()
+	dw.buf.Clear()
 }
 
 func (dw *domainsWriter) Commit() error {
@@ -172,6 +174,56 @@ func (dw *domainsWriter) Commit() error {
 	if err := dw.tx.Commit(); err != nil {
 		return err
 	}
-
+	dw.buf.Clear()
 	return nil
+}
+
+type writeTask struct {
+	blockNum uint64
+	fn       func(writer DomainsWriter) error
+	retCh    chan error
+}
+
+type writeWorker struct {
+	dm     *DomainsManager
+	taskCh chan *writeTask
+
+	writer DomainsWriter
+}
+
+func NewWriteWorker(dm *DomainsManager, taskCh chan *writeTask) *writeWorker {
+	return &writeWorker{dm: dm, taskCh: taskCh}
+}
+
+func (worker *writeWorker) handle(task *writeTask) error {
+	if writer, err := NewDomainsWriter(worker.dm.db, worker.dm.agg, worker.dm.writeBuffer); err != nil {
+		return err
+	} else {
+		worker.writer = writer
+	}
+	defer worker.writer.Close()
+
+	if err := worker.writer.SetBlockNum(task.blockNum); err != nil {
+		return err
+	}
+	if err := task.fn(worker.writer); err != nil {
+		return err
+	}
+	if err := worker.writer.WriteBlockNum(task.blockNum); err != nil {
+		return err
+	}
+	if err := worker.writer.Commit(); err != nil {
+		return err
+	}
+	for _, reader := range worker.dm.readers {
+		reader.needReopen.Store(1)
+	}
+	return nil
+}
+
+func (worker *writeWorker) loop() {
+	for task := range worker.taskCh {
+		e := worker.handle(task)
+		task.retCh <- e
+	}
 }
