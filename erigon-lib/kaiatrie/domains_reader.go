@@ -17,6 +17,7 @@ package kaiatrie
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 
 	"github.com/erigontech/erigon-lib/kv"
@@ -41,9 +42,11 @@ type DomainsReader interface {
 type domainsReader struct {
 	tx    kv.Tx
 	aggTx *state.AggregatorRoTx
+
+	buf *DomainsWriteBuffer
 }
 
-func NewDomainsReader(db kv.RoDB, agg *state.Aggregator) (DomainsReader, error) {
+func NewDomainsReader(db kv.RoDB, agg *state.Aggregator, buf *DomainsWriteBuffer) (DomainsReader, error) {
 	tx, err := db.BeginRo(context.Background())
 	if err != nil {
 		return nil, err
@@ -52,15 +55,22 @@ func NewDomainsReader(db kv.RoDB, agg *state.Aggregator) (DomainsReader, error) 
 	return &domainsReader{
 		tx:    tx,
 		aggTx: aggTx,
+		buf:   buf,
 	}, nil
 }
 
 func (dr *domainsReader) DomainGetAsOf(domain kv.Domain, key []byte, blockNum uint64) ([]byte, error) {
-	v, _, err := dr.aggTx.GetAsOf(dr.tx, domain, key, calcTxNum(blockNum)+1)
+	if v, ok := dr.buf.GetAsOf(domain, key, calcTxNum(blockNum)); ok { // not flushed
+		return v, nil
+	}
+	v, _, err := dr.aggTx.GetAsOf(dr.tx, domain, key, calcTxNum(blockNum)+1) // flushed
 	return v, err
 }
 
 func (dr *domainsReader) DomainGetLatest(domain kv.Domain, key []byte) ([]byte, uint64, error) {
+	if v, ok := dr.buf.GetAsOf(domain, key, math.MaxUint64); ok { // not flushed
+		return v, 0, nil
+	}
 	v, step, _, err := dr.aggTx.GetLatest(domain, key, dr.tx)
 	return v, step, err
 }
@@ -95,7 +105,7 @@ func (worker *readWorker) reopen() error {
 		worker.reader.Close()
 	}
 
-	newReader, err := NewDomainsReader(worker.dm.db, worker.dm.agg)
+	newReader, err := NewDomainsReader(worker.dm.db, worker.dm.agg, worker.dm.writeBuffer)
 	if err != nil {
 		worker.reader = nil
 		return err

@@ -84,12 +84,12 @@ type DomainsWriteBuffer struct {
 func NewDomainsWriteBuffer() *DomainsWriteBuffer {
 	return &DomainsWriteBuffer{
 		buffers: [kv.DomainLen]*WriteBuffer{
-			NewWriteBuffer(length.Addr), // AccountsDomain
-			NewWriteBuffer(length.Hash), // StorageDomain
-			nil,                         // CodeDomain
-			NewWriteBuffer(128),         // CommitmentDomain
-			nil,                         // ReceiptDomain
-			nil,                         // RCacheDomain
+			NewWriteBuffer(length.Addr),               // AccountsDomain
+			NewWriteBuffer(length.Addr + length.Hash), // StorageDomain
+			nil,                 // CodeDomain
+			NewWriteBuffer(128), // CommitmentDomain
+			NewWriteBuffer(16),  // ReceiptDomain
+			nil,                 // RCacheDomain
 		},
 	}
 }

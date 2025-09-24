@@ -16,6 +16,7 @@
 package kaiatrie
 
 import (
+	"encoding/hex"
 	"math/big"
 	"os/exec"
 	"slices"
@@ -45,7 +46,7 @@ func Test_DomainsManager_BlockNums(t *testing.T) {
 	assert.NoError(t, dm.WithWriter(2, noop))
 
 	// Cannot commit a block less than last block.
-	assert.ErrorIs(t, dm.withWriter_workerThread(1, noop), errCommitBlockTooLow)
+	assert.ErrorIs(t, dm.WithWriter(1, noop), errCommitBlockTooLow)
 	// Cannot commit a block with a gap from the last block.
 	assert.ErrorIs(t, dm.WithWriter(4, noop), errCommitBlockTooHigh)
 
@@ -55,40 +56,104 @@ func Test_DomainsManager_BlockNums(t *testing.T) {
 	assert.NoError(t, dm.WithWriter(3, noop))
 }
 
-func Test_DomainsManager_Reopen(t *testing.T) {
+func Test_DomainsManager_ReadWrite(t *testing.T) {
 	var (
-		addr   = common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes()
-		acc    = accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(90)})
-		dir    = t.TempDir()
-		logger = log.Root()
+		addr = common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes()
+		acc  = accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(90)})
 	)
 
-	// Write and close.
-	dm, err := NewDomainsManager(dir, logger)
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
 	require.NoError(t, err)
+	defer dm.Close()
+
 	dm.WithWriter(0, func(writer DomainsWriter) error {
 		writer.DomainPutOrDel(kv.AccountsDomain, addr, acc)
 		return nil
 	})
-	dm.Close()
 
-	// Reopen and read.
-	dm, err = NewDomainsManager(dir, logger)
-	require.NoError(t, err)
 	dm.WithReader(func(reader DomainsReader) error {
 		actualAcc, err := reader.DomainGetAsOf(kv.AccountsDomain, addr, 0)
 		assert.NoError(t, err)
 		assert.Equal(t, acc, actualAcc)
 		return nil
 	})
+}
+
+func Test_DomainsManager_Commit(t *testing.T) {
+	var (
+		addr   = common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes()
+		acc0   = accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(90)})
+		acc1   = accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(91)})
+		dir    = t.TempDir()
+		logger = log.Root()
+	)
+
+	dm, err := NewDomainsManager(dir, logger, &DomainsOpts{EnableWriteWorker: true})
+	require.NoError(t, err)
+
+	dm.withWriter_workerThread(0, func(writer DomainsWriter) error {
+		writer.DomainPutOrDel(kv.AccountsDomain, addr, acc0)
+		return nil
+	})
+	dm.withWriter_workerThread(1, func(writer DomainsWriter) error {
+		writer.DomainPutOrDel(kv.AccountsDomain, addr, acc1)
+		return nil
+	})
+
+	dm.CommitWrites()
+
+	dm.WithReader(func(reader DomainsReader) error {
+		actualAcc, err := reader.DomainGetAsOf(kv.AccountsDomain, addr, 0)
+		assert.NoError(t, err)
+		assert.Equal(t, acc0, actualAcc)
+
+		actualAcc, err = reader.DomainGetAsOf(kv.AccountsDomain, addr, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, acc1, actualAcc)
+		return nil
+	})
+	dm.Close()
+}
+
+func Test_DomainsManager_Reopen(t *testing.T) {
+	var (
+		addr   = common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes()
+		acc0   = accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(90)})
+		acc1   = accounts.SerialiseV3(&accounts.Account{Balance: *uint256.NewInt(91)})
+		dir    = t.TempDir()
+		logger = log.Root()
+	)
+
+	// Write and close.
+	dm, err := NewDomainsManager(dir, logger, &DomainsOpts{EnableWriteWorker: true})
+	require.NoError(t, err)
+	dm.withWriter_workerThread(0, func(writer DomainsWriter) error {
+		writer.DomainPutOrDel(kv.AccountsDomain, addr, acc0)
+		return nil
+	})
+	dm.withWriter_workerThread(1, func(writer DomainsWriter) error {
+		writer.DomainPutOrDel(kv.AccountsDomain, addr, acc1)
+		return nil
+	})
+	dm.Close()
+
+	// Reopen and read.
+	dm, err = NewDomainsManager(dir, logger, nil)
+	require.NoError(t, err)
+	dm.WithReader(func(reader DomainsReader) error {
+		actualAcc, err := reader.DomainGetAsOf(kv.AccountsDomain, addr, 0)
+		assert.NoError(t, err)
+		assert.Equal(t, acc0, actualAcc)
+
+		actualAcc, err = reader.DomainGetAsOf(kv.AccountsDomain, addr, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, acc1, actualAcc)
+		return nil
+	})
 	dm.Close()
 }
 
 func Test_DomainsManager_Iterator(t *testing.T) {
-	dm, err := NewTemporaryDomainsManager(t.TempDir())
-	require.NoError(t, err)
-	defer dm.Close()
-
 	var (
 		accounts = [][2]string{
 			{"0x1111111111111111111111111111111111111111", "0x00015a0000"},
@@ -105,6 +170,9 @@ func Test_DomainsManager_Iterator(t *testing.T) {
 	)
 
 	// Commit across 3 blocks.
+	dir := t.TempDir()
+	dm, err := NewDomainsManager(dir, log.Root(), nil)
+	require.NoError(t, err)
 	for i := 0; i < 3; i++ {
 		addr, acc := hexutil.MustDecode(accounts[i][0]), hexutil.MustDecode(accounts[i][1])
 		slot, data := hexutil.MustDecode(storage[i][0]), hexutil.MustDecode(storage[i][1])
@@ -114,6 +182,7 @@ func Test_DomainsManager_Iterator(t *testing.T) {
 			return nil
 		}))
 	}
+	require.NoError(t, dm.CommitWrites())
 
 	it, err := NewAccountIterator(dm, 0)
 	require.NoError(t, err)
@@ -148,8 +217,8 @@ func checkIt(t *testing.T, it DomainsIterator, items [][2]string) {
 		key, value, ok, err := it.Next()
 		require.NoError(t, err)
 		assert.Equal(t, true, ok)
-		assert.Equal(t, expectedKey, key)
-		assert.Equal(t, expectedValue, value)
+		assert.Equal(t, hex.EncodeToString(expectedKey), hex.EncodeToString(key))
+		assert.Equal(t, hex.EncodeToString(expectedValue), hex.EncodeToString(value))
 	}
 	key, value, ok, err := it.Next()
 	assert.NoError(t, err)
@@ -213,16 +282,15 @@ func Benchmark_Writer(b *testing.B) {
 	}
 
 	b.Run("open RwTx every block", func(b *testing.B) {
-		dm, err := NewDomainsManager(b.TempDir(), log.Root())
+		dm, err := NewDomainsManager(b.TempDir(), log.Root(), &DomainsOpts{EnableWriteWorker: false})
 		require.NoError(b, err)
 		defer dm.Close()
 
 		for i := 0; i < b.N; i++ {
-			writer, _ := NewDomainsWriter(dm.db, dm.agg, NewDomainsWriteBuffer())
-			writer.SetBlockNum(uint64(i))
-			putItems(writer, i, 10)
-			writer.WriteBlockNum(uint64(i))
-			writer.Commit()
+			dm.withWriter_callerThread(uint64(i), func(writer DomainsWriter) error {
+				putItems(writer, i, 10)
+				return nil
+			})
 		}
 
 		out, _ := exec.Command("du", "-sh", dm.dirs.DataDir).Output()
@@ -230,24 +298,19 @@ func Benchmark_Writer(b *testing.B) {
 	})
 
 	b.Run("reuse RwTx", func(b *testing.B) {
-		dm, err := NewDomainsManager(b.TempDir(), log.Root())
+		dm, err := NewDomainsManager(b.TempDir(), log.Root(), nil)
 		require.NoError(b, err)
-		defer dm.Close()
 
-		writer, _ := NewDomainsWriter(dm.db, dm.agg, NewDomainsWriteBuffer())
 		for i := 0; i < b.N; i++ {
-			writer.SetBlockNum(uint64(i))
-			putItems(writer, i, 10)
-			writer.WriteBlockNum(uint64(i))
-			// periodically commit and reopen
-			if i%128 == 127 {
-				writer.Commit()
-				writer, _ = NewDomainsWriter(dm.db, dm.agg, NewDomainsWriteBuffer())
-			}
+			dm.withWriter_workerThread(uint64(i), func(writer DomainsWriter) error {
+				putItems(writer, i, 10)
+				return nil
+			})
 		}
-		writer.Commit()
+		dm.Close()
 
 		out, _ := exec.Command("du", "-sh", dm.dirs.DataDir).Output()
 		b.Logf("N=%d datadir=%s", b.N, out)
 	})
+
 }

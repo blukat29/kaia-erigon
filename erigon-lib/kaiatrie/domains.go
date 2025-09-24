@@ -44,11 +44,18 @@ var (
 	keyRootPrefix = []byte("stateroot")
 )
 
+type DomainsOpts struct {
+	NumReadWorkers    int
+	EnableWriteWorker bool
+}
+
 // DomainsManager is a dispatcher for the operations reading from and writing to the MDBX database.
 // MDBX explicitly requires database transactions to be created and used within the same goroutine,
 // and writing transactions cannot be concurrently executed. DomainsManager is responsible for
 // keeping the constraints while being efficient.
 type DomainsManager struct {
+	DomainsOpts
+
 	mu     sync.Mutex
 	dirs   datadir.Dirs
 	logger log.Logger
@@ -88,17 +95,17 @@ func NewTemporaryDomainsManager(dir string) (*DomainsManager, error) {
 		return nil, err
 	}
 
-	return newDomainsManager(dirs, logger, db, runtime.GOMAXPROCS(0))
+	return newDomainsManager(dirs, logger, db, &DomainsOpts{NumReadWorkers: 4, EnableWriteWorker: true})
 }
 
-func NewDomainsManager(dir string, logger_ foreignLogger) (*DomainsManager, error) {
+func NewDomainsManager(dir string, logger_ foreignLogger, dmOpts *DomainsOpts) (*DomainsManager, error) {
 	dirs := datadir.New(dir)
 	logger := loggerFromForeign(logger_)
 
 	// node.go:OpenDatabase()
 	// Follow the Erigon default settings in general.
 	roTxsLimiter := semaphore.NewWeighted(32) // same as OpenDatabase()
-	opts := mdbx.New(kv.ChainDB, logger).
+	dbOpts := mdbx.New(kv.ChainDB, logger).
 		Path(dir).
 		GrowthStep(16 * datasize.MB).      // same as OpenDatabase()
 		PageSize(4 * datasize.KB).         // DbPageSizeFlag default
@@ -107,15 +114,19 @@ func NewDomainsManager(dir string, logger_ foreignLogger) (*DomainsManager, erro
 		RoTxsLimiter(roTxsLimiter).
 		Readonly(false).
 		Exclusive(true)
-	db, err := opts.Open(context.Background())
+	db, err := dbOpts.Open(context.Background())
 	if err != nil {
 		return nil, err
 	}
 
-	return newDomainsManager(dirs, logger, db, runtime.GOMAXPROCS(0))
+	return newDomainsManager(dirs, logger, db, dmOpts)
 }
 
-func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, numWorkers int) (*DomainsManager, error) {
+func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, dmOpts *DomainsOpts) (*DomainsManager, error) {
+	if dmOpts == nil {
+		dmOpts = &DomainsOpts{NumReadWorkers: runtime.GOMAXPROCS(0), EnableWriteWorker: true}
+	}
+
 	// eth/backend.go:setUpBlockReader
 	agg, err := state.NewAggregator2(context.Background(), dirs, config3.DefaultStepSize, db, logger)
 	if err != nil {
@@ -129,13 +140,15 @@ func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, numWork
 	}
 
 	dm := &DomainsManager{
+		DomainsOpts: *dmOpts,
+
 		dirs:   dirs,
 		logger: logger,
 		db:     db,
 		agg:    agg,
 
-		readers:   make([]*readWorker, numWorkers),
-		readersCh: make(chan *readTask, numWorkers*8),
+		readers:   make([]*readWorker, dmOpts.NumReadWorkers),
+		readersCh: make(chan *readTask, dmOpts.NumReadWorkers*8),
 
 		writerCh: make(chan *writeTask, 1),
 
@@ -146,13 +159,13 @@ func newDomainsManager(dirs datadir.Dirs, logger log.Logger, db kv.RwDB, numWork
 		}},
 	}
 
-	dm.startReadWorkers(numWorkers)
+	dm.startReadWorkers()
 	dm.startWriteWorker()
 	return dm, nil
 }
 
-func (dm *DomainsManager) startReadWorkers(numWorkers int) {
-	for i := 0; i < numWorkers; i++ {
+func (dm *DomainsManager) startReadWorkers() {
+	for i := 0; i < dm.NumReadWorkers; i++ {
 		dm.readers[i] = NewReadWorker(dm, dm.readersCh)
 		dm.wg.Add(1)
 		go func() {
@@ -163,6 +176,9 @@ func (dm *DomainsManager) startReadWorkers(numWorkers int) {
 }
 
 func (dm *DomainsManager) startWriteWorker() {
+	if !dm.EnableWriteWorker {
+		return
+	}
 	dm.writer = NewWriteWorker(dm, dm.writerCh)
 	dm.wg.Add(1)
 	go func() {
@@ -172,11 +188,15 @@ func (dm *DomainsManager) startWriteWorker() {
 }
 
 func (dm *DomainsManager) WithReader(fn func(reader DomainsReader) error) error {
-	return dm.withReader_workerThread(fn)
+	if dm.NumReadWorkers == 0 {
+		return dm.withReader_callerThread(fn)
+	} else {
+		return dm.withReader_workerThread(fn)
+	}
 }
 
 func (dm *DomainsManager) withReader_callerThread(fn func(reader DomainsReader) error) error {
-	reader, err := NewDomainsReader(dm.db, dm.agg)
+	reader, err := NewDomainsReader(dm.db, dm.agg, dm.writeBuffer)
 	if err != nil {
 		return err
 	}
@@ -194,7 +214,11 @@ func (dm *DomainsManager) withReader_workerThread(fn func(reader DomainsReader) 
 }
 
 func (dm *DomainsManager) WithWriter(blockNum uint64, fn func(writer DomainsWriter) error) error {
-	return dm.withWriter_workerThread(blockNum, fn)
+	if !dm.EnableWriteWorker {
+		return dm.withWriter_callerThread(blockNum, fn)
+	} else {
+		return dm.withWriter_workerThread(blockNum, fn)
+	}
 }
 
 func (dm *DomainsManager) withWriter_callerThread(blockNum uint64, fn func(writer DomainsWriter) error) error {
@@ -236,12 +260,28 @@ func (dm *DomainsManager) withWriter_workerThread(blockNum uint64, fn func(write
 	return res
 }
 
+func (dm *DomainsManager) CommitWrites() error {
+	if !dm.EnableWriteWorker {
+		return nil
+	}
+	task := &writeTask{
+		reopen: true,
+		retCh:  make(chan error),
+	}
+	dm.writerCh <- task
+	return <-task.retCh
+}
+
 func (dm *DomainsManager) Close() {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
-	close(dm.readersCh)
-	close(dm.writerCh)
+	if dm.NumReadWorkers > 0 {
+		close(dm.readersCh)
+	}
+	if dm.EnableWriteWorker {
+		close(dm.writerCh)
+	}
 	dm.wg.Wait()
 
 	dm.agg.Close()

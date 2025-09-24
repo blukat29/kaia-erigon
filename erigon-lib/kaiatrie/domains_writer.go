@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/erigontech/erigon-lib/kv/rawdbv3"
@@ -43,6 +44,7 @@ type DomainsWriter interface {
 	SetBlockNum(blockNum uint64) error
 	// WriteBlockNum writes the block number to the TxNums table
 	WriteBlockNum(blockNum uint64) error
+	Flush() error
 	// Commit commits the transaction and close resources
 	Commit() error
 }
@@ -92,6 +94,9 @@ func (dw *domainsWriter) DomainGetAsOf(domain kv.Domain, key []byte, blockNum ui
 }
 
 func (dw *domainsWriter) DomainGetLatest(domain kv.Domain, key []byte) ([]byte, uint64, error) {
+	if v, ok := dw.buf.GetAsOf(domain, key, math.MaxUint64); ok { // not flushed
+		return v, 0, nil
+	}
 	v, step, _, err := dw.aggTx.GetLatest(domain, key, dw.tx)
 	return v, step, err
 }
@@ -150,6 +155,29 @@ func (dw *domainsWriter) WriteBlockNum(blockNum uint64) error {
 	}
 }
 
+func (dw *domainsWriter) Flush() error {
+	// domain_shared.go:Flush()
+	ctx := context.Background()
+	for i := range kv.DomainLen {
+		if err := dw.writers[i].Flush(ctx, dw.tx); err != nil {
+			return err
+		}
+		dw.aggTx.CloseValsCursor(i)
+	}
+	return nil
+}
+
+func (dw *domainsWriter) Commit() error {
+	if err := dw.Flush(); err != nil {
+		return err
+	}
+	if err := dw.tx.Commit(); err != nil {
+		return err
+	}
+	dw.buf.Clear()
+	return nil
+}
+
 // dw.Close() will tx.Rollback() inside. But it's safe to Commit then Rollback.
 // See kv_interface.go:RwDB for the common pattern.
 func (dw *domainsWriter) Close() {
@@ -161,24 +189,9 @@ func (dw *domainsWriter) Close() {
 	dw.buf.Clear()
 }
 
-func (dw *domainsWriter) Commit() error {
-	// domain_shared.go:Flush()
-	ctx := context.Background()
-	for i := range kv.DomainLen {
-		if err := dw.writers[i].Flush(ctx, dw.tx); err != nil {
-			return err
-		}
-		dw.aggTx.CloseValsCursor(i)
-	}
-
-	if err := dw.tx.Commit(); err != nil {
-		return err
-	}
-	dw.buf.Clear()
-	return nil
-}
-
+// Either {reopen: true, retCh} or {reopen: false, blockNum, fn, retCh}
 type writeTask struct {
+	reopen   bool // If true, commit and reopen the writer after executing the fn.
 	blockNum uint64
 	fn       func(writer DomainsWriter) error
 	retCh    chan error
@@ -195,23 +208,17 @@ func NewWriteWorker(dm *DomainsManager, taskCh chan *writeTask) *writeWorker {
 	return &writeWorker{dm: dm, taskCh: taskCh}
 }
 
-func (worker *writeWorker) handle(task *writeTask) error {
-	if writer, err := NewDomainsWriter(worker.dm.db, worker.dm.agg, worker.dm.writeBuffer); err != nil {
+func (worker *writeWorker) openWriter() error {
+	writer, err := NewDomainsWriter(worker.dm.db, worker.dm.agg, worker.dm.writeBuffer)
+	if err != nil {
 		return err
-	} else {
-		worker.writer = writer
 	}
-	defer worker.writer.Close()
+	worker.writer = writer
+	return nil
+}
 
-	if err := worker.writer.SetBlockNum(task.blockNum); err != nil {
-		return err
-	}
-	if err := task.fn(worker.writer); err != nil {
-		return err
-	}
-	if err := worker.writer.WriteBlockNum(task.blockNum); err != nil {
-		return err
-	}
+func (worker *writeWorker) closeWriter() error {
+	defer worker.writer.Close() // Always close the writer
 	if err := worker.writer.Commit(); err != nil {
 		return err
 	}
@@ -221,9 +228,47 @@ func (worker *writeWorker) handle(task *writeTask) error {
 	return nil
 }
 
+func (worker *writeWorker) reopenWriter() error {
+	if err := worker.closeWriter(); err != nil {
+		return err
+	}
+	if err := worker.openWriter(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (worker *writeWorker) handle(task *writeTask) error {
+	if err := worker.writer.SetBlockNum(task.blockNum); err != nil {
+		return err
+	}
+	if err := task.fn(worker.writer); err != nil {
+		return err
+	}
+	if err := worker.writer.WriteBlockNum(task.blockNum); err != nil {
+		return err
+	}
+	if err := worker.writer.Flush(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (worker *writeWorker) loop() {
+	openErr := worker.openWriter()
+
 	for task := range worker.taskCh {
-		e := worker.handle(task)
-		task.retCh <- e
+		if openErr != nil {
+			task.retCh <- openErr
+		} else if task.reopen {
+			openErr := worker.reopenWriter()
+			task.retCh <- openErr
+		} else {
+			task.retCh <- worker.handle(task)
+		}
+	}
+
+	if worker.writer != nil {
+		worker.closeWriter()
 	}
 }
