@@ -26,7 +26,30 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func Test_Buffer_TxNums(t *testing.T) {
+func Test_WriteBufferFixedLen_EdgeCases(t *testing.T) {
+	wb := NewWriteBufferFixedLen()
+	wb.SetTxNum(1)
+
+	// Normal case
+	wb.Put([]byte("1111"), []byte("vvvv"))
+	v, ok := wb.GetAsOf([]byte("1111"), 1)
+	assert.True(t, ok)
+	assert.Equal(t, []byte("vvvv"), v)
+
+	// Nonexistent keys
+	_, ok = wb.GetAsOf([]byte("1110"), 0)
+	assert.False(t, ok)
+	_, ok = wb.GetAsOf([]byte("1112"), 0)
+	assert.False(t, ok)
+
+	// Short key
+	wb.Put([]byte("111"), []byte("vvv"))
+	v, ok = wb.GetAsOf([]byte("111"), 1)
+	assert.True(t, ok)
+	assert.Equal(t, []byte("vvv"), v)
+}
+
+func Test_WriteVufferFixedLen_TxNums(t *testing.T) {
 	var (
 		key = []byte("1111")
 
@@ -57,7 +80,7 @@ func Test_Buffer_TxNums(t *testing.T) {
 		}
 	)
 
-	wb := NewWriteBuffer(4)
+	wb := NewWriteBufferFixedLen()
 
 	for _, input := range inputs {
 		wb.SetTxNum(input.txNum)
@@ -72,30 +95,31 @@ func Test_Buffer_TxNums(t *testing.T) {
 	}
 }
 
-func Test_Buffer_GetAsOf(t *testing.T) {
-	wb := NewWriteBuffer(4)
-	wb.SetTxNum(1)
+func Test_DomainsWriteBuffer_ZeroKeys(t *testing.T) {
+	// Zero-byte keys occurs in CommitmentDomain to store Branches. prefix 0x00 and 0x0000 are different.
+	wb := NewWriteBufferFixedLen()
 
-	// Normal case
-	wb.Put([]byte("1111"), []byte("vvvv"))
-	v, ok := wb.GetAsOf([]byte("1111"), 1)
+	k1 := []byte{0}
+	k2 := []byte{0, 0}
+	k3 := []byte{0, 0, 0}
+
+	wb.Put(k1, []byte("x"))
+	wb.Put(k2, []byte("y"))
+
+	v, ok := wb.GetAsOf(k1, 1)
 	assert.True(t, ok)
-	assert.Equal(t, []byte("vvvv"), v)
+	assert.Equal(t, []byte("x"), v)
 
-	// Nonexistent keys
-	_, ok = wb.GetAsOf([]byte("1110"), 0)
-	assert.False(t, ok)
-	_, ok = wb.GetAsOf([]byte("1112"), 0)
-	assert.False(t, ok)
-
-	// Short key
-	wb.Put([]byte("111"), []byte("vvv"))
-	v, ok = wb.GetAsOf([]byte("111"), 1)
+	v, ok = wb.GetAsOf(k2, 1)
 	assert.True(t, ok)
-	assert.Equal(t, []byte("vvv"), v)
+	assert.Equal(t, []byte("y"), v)
+
+	v, ok = wb.GetAsOf(k3, 1)
+	assert.False(t, ok)
+	assert.Nil(t, v)
 }
 
-func Test_DomainsWriteBuffer_GetAsOf(t *testing.T) {
+func Test_DomainsWriteBuffer(t *testing.T) {
 	dwb := NewDomainsWriteBuffer()
 	dwb.SetTxNum(1)
 
@@ -117,11 +141,9 @@ func Test_DomainsWriteBuffer_GetAsOf(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, []byte("z"), v)
 
-	// Not supported domains
-	_, ok = dwb.GetAsOf(kv.CodeDomain, []byte("1111"), 1)
-	assert.False(t, ok)
-	_, ok = dwb.GetAsOf(kv.ReceiptDomain, []byte("1111"), 1)
-	assert.False(t, ok)
-	_, ok = dwb.GetAsOf(kv.RCacheDomain, []byte("1111"), 1)
-	assert.False(t, ok)
+	// ReceiptDomain
+	dwb.Put(kv.ReceiptDomain, []byte("1111"), []byte("w"))
+	v, ok = dwb.GetAsOf(kv.ReceiptDomain, []byte("1111"), 1)
+	assert.True(t, ok)
+	assert.Equal(t, []byte("w"), v)
 }

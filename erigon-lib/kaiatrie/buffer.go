@@ -19,21 +19,18 @@ import (
 	"encoding/binary"
 	"strings"
 
-	"github.com/erigontech/erigon-lib/common/length"
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/tidwall/btree"
 )
 
 type WriteBuffer struct {
-	keyLen int
-	txNum  uint64                     // current tx num
-	m      *btree.Map[string, []byte] // (key || txNum) => value
+	txNum uint64                     // current tx num
+	m     *btree.Map[string, []byte] // (key || txNum) => value
 }
 
-func NewWriteBuffer(keyLen int) *WriteBuffer {
+func NewWriteBufferFixedLen() *WriteBuffer {
 	return &WriteBuffer{
-		keyLen: keyLen,
-		m:      btree.NewMap[string, []byte](128),
+		m: btree.NewMap[string, []byte](128),
 	}
 }
 
@@ -66,14 +63,12 @@ func (b *WriteBuffer) GetAsOf(key []byte, txNum uint64) ([]byte, bool) {
 	return result, ok
 }
 
+// [keyLen][key][txNum]
 func (b *WriteBuffer) makeBufferKey(key []byte, txNum uint64) string {
-	buf := make([]byte, b.keyLen+8)
-	if b.keyLen <= len(key) {
-		copy(buf, key[:b.keyLen])
-	} else {
-		copy(buf, key)
-	}
-	binary.BigEndian.PutUint64(buf[b.keyLen:], txNum)
+	keyLen := []byte{byte(len(key))}
+	numBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(numBuf, txNum)
+	buf := append(append(keyLen, key...), numBuf...)
 	return string(buf)
 }
 
@@ -82,16 +77,11 @@ type DomainsWriteBuffer struct {
 }
 
 func NewDomainsWriteBuffer() *DomainsWriteBuffer {
-	return &DomainsWriteBuffer{
-		buffers: [kv.DomainLen]*WriteBuffer{
-			NewWriteBuffer(length.Addr),               // AccountsDomain
-			NewWriteBuffer(length.Addr + length.Hash), // StorageDomain
-			nil,                 // CodeDomain
-			NewWriteBuffer(128), // CommitmentDomain
-			NewWriteBuffer(16),  // ReceiptDomain
-			nil,                 // RCacheDomain
-		},
+	buf := &DomainsWriteBuffer{}
+	for i := range kv.DomainLen {
+		buf.buffers[i] = NewWriteBufferFixedLen()
 	}
+	return buf
 }
 
 func (buf *DomainsWriteBuffer) SetTxNum(txNum uint64) {
