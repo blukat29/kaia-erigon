@@ -56,6 +56,7 @@ func Test_DomainsManager_BlockNums(t *testing.T) {
 	assert.NoError(t, dm.WithWriter(3, noop))
 }
 
+// Test that write -> read works.
 func Test_DomainsManager_ReadWrite(t *testing.T) {
 	var (
 		addr = common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes()
@@ -79,6 +80,7 @@ func Test_DomainsManager_ReadWrite(t *testing.T) {
 	})
 }
 
+// Test that write -> commit -> read works.
 func Test_DomainsManager_Commit(t *testing.T) {
 	var (
 		addr   = common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes()
@@ -91,16 +93,16 @@ func Test_DomainsManager_Commit(t *testing.T) {
 	dm, err := NewDomainsManager(dir, logger, &DomainsOpts{EnableWriteWorker: true})
 	require.NoError(t, err)
 
-	dm.withWriter_workerThread(0, func(writer DomainsWriter) error {
+	require.NoError(t, dm.withWriter_workerThread(0, func(writer DomainsWriter) error {
 		writer.DomainPutOrDel(kv.AccountsDomain, addr, acc0)
 		return nil
-	})
-	dm.withWriter_workerThread(1, func(writer DomainsWriter) error {
+	}))
+	require.NoError(t, dm.withWriter_workerThread(1, func(writer DomainsWriter) error {
 		writer.DomainPutOrDel(kv.AccountsDomain, addr, acc1)
 		return nil
-	})
+	}))
 
-	dm.CommitWrites()
+	require.NoError(t, dm.CommitWrites())
 
 	dm.WithReader(func(reader DomainsReader) error {
 		actualAcc, err := reader.DomainGetAsOf(kv.AccountsDomain, addr, 0)
@@ -115,6 +117,7 @@ func Test_DomainsManager_Commit(t *testing.T) {
 	dm.Close()
 }
 
+// Test that write -> close -> open -> read works.
 func Test_DomainsManager_Reopen(t *testing.T) {
 	var (
 		addr   = common.HexToAddress("0x1111111111111111111111111111111111111111").Bytes()
@@ -127,14 +130,14 @@ func Test_DomainsManager_Reopen(t *testing.T) {
 	// Write and close.
 	dm, err := NewDomainsManager(dir, logger, &DomainsOpts{EnableWriteWorker: true})
 	require.NoError(t, err)
-	dm.withWriter_workerThread(0, func(writer DomainsWriter) error {
+	require.NoError(t, dm.withWriter_workerThread(0, func(writer DomainsWriter) error {
 		writer.DomainPutOrDel(kv.AccountsDomain, addr, acc0)
 		return nil
-	})
-	dm.withWriter_workerThread(1, func(writer DomainsWriter) error {
+	}))
+	require.NoError(t, dm.withWriter_workerThread(1, func(writer DomainsWriter) error {
 		writer.DomainPutOrDel(kv.AccountsDomain, addr, acc1)
 		return nil
-	})
+	}))
 	dm.Close()
 
 	// Reopen and read.
@@ -151,6 +154,53 @@ func Test_DomainsManager_Reopen(t *testing.T) {
 		return nil
 	})
 	dm.Close()
+}
+
+func Test_DomainsManager_WriteMany(t *testing.T) {
+	maxNum := 100
+	count := 10000
+
+	getPair := func(num, j int) ([]byte, []byte) {
+		n := int64(num*0x10000 + j)
+		k := common.BigToAddress(big.NewInt(n)).Bytes()
+		v := common.BigToHash(big.NewInt(n)).Bytes()
+		return k, v
+	}
+
+	putItems := func(writer DomainsWriter, num, count int) {
+		for i := range count {
+			k, v := getPair(num, i)
+			assert.NoError(t, writer.DomainPutOrDel(kv.AccountsDomain, k, v))
+		}
+	}
+
+	checkItems := func(reader DomainsReader, num, count int) {
+		for i := range count {
+			k, expectedV := getPair(num, i)
+			v, err := reader.DomainGetAsOf(kv.AccountsDomain, k, uint64(num))
+			assert.NoError(t, err)
+			if !assert.Equal(t, hex.EncodeToString(expectedV), hex.EncodeToString(v), hex.EncodeToString(k)) {
+				break
+			}
+		}
+	}
+
+	dm, err := NewDomainsManager(t.TempDir(), log.Root(), nil)
+	require.NoError(t, err)
+	defer dm.Close()
+
+	for num := 0; num < maxNum; num++ {
+		require.NoError(t, dm.WithWriter(uint64(num), func(writer DomainsWriter) error {
+			putItems(writer, num, count)
+			return nil
+		}))
+	}
+	require.NoError(t, dm.WithReader(func(reader DomainsReader) error {
+		for num := 0; num < maxNum; num++ {
+			checkItems(reader, num, count)
+		}
+		return nil
+	}))
 }
 
 func Test_DomainsManager_Iterator(t *testing.T) {
