@@ -69,7 +69,7 @@ type DomainsManager struct {
 
 	// Shared between readers and writers
 	wg          sync.WaitGroup
-	writeBuffer *DomainsWriteBuffer
+	writeBuffer DomainsWriteBuffer
 
 	// DomainsReader pool
 	readers   []*readWorker

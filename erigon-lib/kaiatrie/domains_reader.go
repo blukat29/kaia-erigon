@@ -43,10 +43,10 @@ type domainsReader struct {
 	tx    kv.Tx
 	aggTx *state.AggregatorRoTx
 
-	buf *DomainsWriteBuffer
+	buf DomainsWriteBuffer
 }
 
-func NewDomainsReader(db kv.RoDB, agg *state.Aggregator, buf *DomainsWriteBuffer) (DomainsReader, error) {
+func NewDomainsReader(db kv.RoDB, agg *state.Aggregator, buf DomainsWriteBuffer) (DomainsReader, error) {
 	tx, err := db.BeginRo(context.Background())
 	if err != nil {
 		return nil, err

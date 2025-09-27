@@ -72,43 +72,32 @@ func (b *WriteBuffer) makeBufferKey(key []byte, txNum uint64) string {
 	return string(buf)
 }
 
-type DomainsWriteBuffer struct {
-	buffers [kv.DomainLen]*WriteBuffer
-}
+type DomainsWriteBuffer [kv.DomainLen]*WriteBuffer
 
-func NewDomainsWriteBuffer() *DomainsWriteBuffer {
-	buf := &DomainsWriteBuffer{}
+func NewDomainsWriteBuffer() DomainsWriteBuffer {
+	buf := DomainsWriteBuffer{}
 	for i := range kv.DomainLen {
-		buf.buffers[i] = NewWriteBufferFixedLen()
+		buf[i] = NewWriteBufferFixedLen()
 	}
 	return buf
 }
 
 func (buf *DomainsWriteBuffer) SetTxNum(txNum uint64) {
-	for _, b := range buf.buffers {
-		if b != nil {
-			b.SetTxNum(txNum)
-		}
+	for _, b := range buf {
+		b.SetTxNum(txNum)
 	}
 }
 
 func (buf *DomainsWriteBuffer) Put(domain kv.Domain, key, value []byte) {
-	if buf.buffers[domain] != nil {
-		buf.buffers[domain].Put(key, value)
-	}
+	buf[domain].Put(key, value)
 }
 
 func (buf *DomainsWriteBuffer) GetAsOf(domain kv.Domain, key []byte, txNum uint64) ([]byte, bool) {
-	if buf.buffers[domain] != nil {
-		return buf.buffers[domain].GetAsOf(key, txNum)
-	}
-	return nil, false
+	return buf[domain].GetAsOf(key, txNum)
 }
 
 func (buf *DomainsWriteBuffer) Clear() {
-	for _, b := range buf.buffers {
-		if b != nil {
-			b.Clear()
-		}
+	for _, b := range buf {
+		b.Clear()
 	}
 }

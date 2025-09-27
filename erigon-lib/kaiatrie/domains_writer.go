@@ -61,11 +61,11 @@ type bufferedWriter interface {
 type domainsWriter struct {
 	tx      kv.RwTx
 	aggTx   *state.AggregatorRoTx
-	buf     *DomainsWriteBuffer
+	buf     DomainsWriteBuffer
 	writers [kv.DomainLen]bufferedWriter
 }
 
-func NewDomainsWriter(db kv.RwDB, agg *state.Aggregator, buf *DomainsWriteBuffer) (DomainsWriter, error) {
+func NewDomainsWriter(db kv.RwDB, agg *state.Aggregator, buf DomainsWriteBuffer) (DomainsWriter, error) {
 	tx, err := db.BeginRw(context.Background())
 	if err != nil {
 		return nil, err
