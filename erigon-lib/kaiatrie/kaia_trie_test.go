@@ -88,7 +88,7 @@ func Test_DeferredAccountTrie_Examples(t *testing.T) {
 		expectedHash string
 	}{
 		{
-			"Kairos block #1 (3/3)",
+			"Kairos block #1",
 			[][2]string{
 				{"0x0000000000000000000000000000000000000400", "0x02f849c580808003c0a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a06c39846f5ab402760078b7bfd16c99e687c75bcb5ec65ac8f3054bad18136f0980"},
 				{"0x4937a6f664630547f6b0c3c235c4f03a64ca36b1", "0x01da8095446c3b15f9926687d2c40534fdb5640000000000008001c0"},
@@ -333,6 +333,83 @@ func Test_DeferredStorageTrie_Multiple(t *testing.T) {
 	}
 	checkTrieHash(t, storageTrie1, storageRoot1)
 	checkTrieHash(t, storageTrie2, storageRoot2)
+}
+
+func Test_DeferredAccountTrie_DeleteStorage(t *testing.T) {
+	var (
+		addr1    = common.HexToAddress("0xb74ff9dea397fe9e231df545eb53fe2adf776cb2").Bytes()
+		addr2    = common.HexToAddress("0x9fdd7a341308e969527bd6c928068edee8399807").Bytes()
+		account1 = "0x01cd8088853a0d2313c000008001c0"
+		account2 = "0x02f849c501808003c0a041fbe8aca458c42a31464a6eff4e221b66f6ffd341a6836c33bf677f63810329a0e4fc5786883b715cd4ea3e4970357eafcd8d76c992023c590fe934d655c20dcb80"
+		storage  = [][2]string{
+			{"0x0000000000000000000000000000000000000000000000000000000000000003", "0x424820546f6b656e000000000000000000000000000000000000000000000010"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000004", "0x4248540000000000000000000000000000000000000000000000000000000006"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000005", "0xefef9fe22a5e1ae68baea7069dcb1ac607ed78cf12"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000002", "0x033b2e3c9fd0803ce8000000"},
+			{"0x3eaa2d76dda4c78c477b7231cb487c2b8fa646a998125bc96085f54b529e14a6", "0x033b2e3c9fd0803ce8000000"},
+		}
+		storageEmpty = [][2]string{
+			{"0x0000000000000000000000000000000000000000000000000000000000000003", "0x"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000004", "0x"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000005", "0x"},
+			{"0x0000000000000000000000000000000000000000000000000000000000000002", "0x"},
+			{"0x3eaa2d76dda4c78c477b7231cb487c2b8fa646a998125bc96085f54b529e14a6", "0x"},
+		}
+		storageRoot = "41fbe8aca458c42a31464a6eff4e221b66f6ffd341a6836c33bf677f63810329"
+		stateRoot1  = "0d3cf586ed4fb6fe6b0b8ed5652b1876b97427621f8cfb400b6581f5c6530c1b" // account1
+		stateRoot2  = "afe26b5a827985072dec81afd19ee626e07354666c7cc118df76517af547012c" // account1 and account2
+	)
+	_, _, _ = addr2, account2, storage
+
+	dm, err := NewTemporaryDomainsManager(t.TempDir())
+	require.NoError(t, err)
+	defer dm.Close()
+
+	{
+		t.Log("Commit block #0: Create account1")
+		accountTrie := NewDeferredAccountTrie(dm, nil, 0, true)
+
+		accountTrie.Put(addr1, hexutil.MustDecode(account1))
+		checkTrieCommit(t, accountTrie, stateRoot1)
+	}
+	{
+		t.Log("Commit block #1: Create account2")
+		accountTrie := NewDeferredAccountTrie(dm, common.HexToHash(stateRoot1).Bytes(), 0, false)
+		storageTrie := NewDeferredStorageTrie(accountTrie, addr2, nil)
+
+		for _, s := range storage {
+			k, v := hexutil.MustDecode(s[0]), hexutil.MustDecode(s[1])
+			storageTrie.Put(k, v)
+		}
+		accountTrie.Put(addr2, hexutil.MustDecode(account2))
+		checkTrieCommit(t, storageTrie, storageRoot)
+		checkTrieCommit(t, accountTrie, stateRoot2)
+	}
+	{
+		t.Log("Commit block #2: Selfdestruct account2")
+		accountTrie := NewDeferredAccountTrie(dm, common.HexToHash(stateRoot2).Bytes(), 1, false)
+		storageTrie := NewDeferredStorageTrie(accountTrie, addr2, common.HexToHash(storageRoot).Bytes())
+
+		require.NoError(t, accountTrie.DeleteAccountStorage(addr2))
+		accountTrie.Put(addr2, nil)
+		checkTrieGet(t, storageTrie, storageEmpty)
+		checkTrieHash(t, storageTrie, storageRoot)
+		checkTrieCommit(t, accountTrie, stateRoot1)
+	}
+	{
+		t.Log("Inspect block #1: storage exists")
+		accountTrie := NewDeferredAccountTrie(dm, common.HexToHash(stateRoot1).Bytes(), 1, false)
+		storageTrie := NewDeferredStorageTrie(accountTrie, addr2, common.HexToHash(storageRoot).Bytes())
+
+		checkTrieGet(t, storageTrie, storage)
+	}
+	{
+		t.Log("Inspect block #2: storage empty")
+		accountTrie := NewDeferredAccountTrie(dm, common.HexToHash(stateRoot1).Bytes(), 2, false)
+		storageTrie := NewDeferredStorageTrie(accountTrie, addr2, common.HexToHash(storageRoot).Bytes())
+
+		checkTrieGet(t, storageTrie, storageEmpty)
+	}
 }
 
 func checkTrieGet(t *testing.T, trie Trie, items [][2]string) {

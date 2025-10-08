@@ -84,6 +84,31 @@ func (at *DeferredAccountTrie) Put(key []byte, value []byte) error {
 	return nil
 }
 
+func (at *DeferredAccountTrie) DeleteAccountStorage(addrB []byte) error {
+	addr := common.BytesToAddress(addrB)
+	at.needHash = true
+
+	// Commit writes to make sure the storage iterator is consistent
+	if err := at.dm.CommitWrites(); err != nil {
+		return err
+	}
+	it, err := NewStorageIterator(at.dm, addrB, at.ctx.readNum)
+	if err != nil {
+		return err
+	}
+	defer it.Close()
+	for {
+		k, _, ok, err := it.Next()
+		if err != nil {
+			return err
+		} else if !ok {
+			break
+		}
+		at.ctx.PutStorage(storageKey(addr, k), nil)
+	}
+	return nil
+}
+
 func (at *DeferredAccountTrie) Hash() ([]byte, error) {
 	if !at.needHash {
 		return at.lastRoot[:], nil
