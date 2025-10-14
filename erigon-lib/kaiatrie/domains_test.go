@@ -21,10 +21,13 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/erigontech/erigon-lib/commitment"
 	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/common/hexutil"
+	"github.com/erigontech/erigon-lib/common/length"
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/erigontech/erigon-lib/log/v3"
 	"github.com/erigontech/erigon-lib/types/accounts"
@@ -363,4 +366,22 @@ func Benchmark_Writer(b *testing.B) {
 		b.Logf("N=%d datadir=%s", b.N, out)
 	})
 
+}
+
+func Benchmark_Hph(b *testing.B) {
+	b.Run("new HPH every time", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			commitment.NewHexPatriciaHashed(length.Addr, nil, b.TempDir())
+		}
+	})
+
+	b.Run("reuse HPH from pool", func(b *testing.B) {
+		hphPool := sync.Pool{New: func() any {
+			return commitment.NewHexPatriciaHashed(length.Addr, nil, b.TempDir())
+		}}
+		for i := 0; i < b.N; i++ {
+			hph := hphPool.Get()
+			hphPool.Put(hph)
+		}
+	})
 }

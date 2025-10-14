@@ -275,3 +275,14 @@ func Test_Context_ModeRawBytes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, expectedHash, hex.EncodeToString(h))
 }
+
+func Benchmark_NewContext(b *testing.B) {
+	dm, err := NewTemporaryDomainsManager(b.TempDir())
+	require.NoError(b, err)
+	defer dm.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		NewDeferredContext(dm, b.TempDir(), ModeRawBytes, 0, 0)
+	}
+}

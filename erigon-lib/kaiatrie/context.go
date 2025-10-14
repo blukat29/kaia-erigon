@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	lru "github.com/hashicorp/golang-lru/v2"
+
 	"github.com/erigontech/erigon-lib/commitment"
 	"github.com/erigontech/erigon-lib/crypto"
 	"github.com/erigontech/erigon-lib/kv"
@@ -77,9 +79,18 @@ type DeferredContext struct {
 	committedAccounts map[string][]byte
 	committedStorages map[string][]byte
 	committedBranches map[string]pendingBranch
+
+	// Cache before DomainsReader
+	cachedAccounts *lru.Cache[string, []byte]
+	cachedStorages *lru.Cache[string, []byte]
+	cachedBranches *lru.Cache[string, pendingBranch]
 }
 
 func NewDeferredContext(dm *DomainsManager, tmpdir string, accountMode AccountMode, readNum, writeNum uint64) *DeferredContext {
+	cachedAccounts, _ := lru.New[string, []byte](1024)
+	cachedStorages, _ := lru.New[string, []byte](1024)
+	cachedBranches, _ := lru.New[string, pendingBranch](1024)
+
 	return &DeferredContext{
 		dm: dm,
 
@@ -98,6 +109,10 @@ func NewDeferredContext(dm *DomainsManager, tmpdir string, accountMode AccountMo
 		committedAccounts: make(map[string][]byte),
 		committedStorages: make(map[string][]byte),
 		committedBranches: make(map[string]pendingBranch),
+
+		cachedAccounts: cachedAccounts,
+		cachedStorages: cachedStorages,
+		cachedBranches: cachedBranches,
 	}
 }
 
@@ -149,6 +164,12 @@ func (c *DeferredContext) GetAccount(addr []byte) ([]byte, error) {
 		c.tracef("ctx.GetAccount(committed) %x: %x\n", addr, data)
 		return data, nil
 	}
+	if c.cachedAccounts != nil {
+		if data, ok := c.cachedAccounts.Get(string(addr)); ok {
+			c.tracef("ctx.GetAccount(cached) %x: %x\n", addr, data)
+			return data, nil
+		}
+	}
 
 	var data []byte
 	err := c.dm.WithReader(func(reader DomainsReader) error {
@@ -160,6 +181,10 @@ func (c *DeferredContext) GetAccount(addr []byte) ([]byte, error) {
 			return nil
 		}
 	})
+
+	if err == nil && c.cachedAccounts != nil {
+		c.cachedAccounts.Add(string(addr), data)
+	}
 	return data, err
 }
 
@@ -172,6 +197,12 @@ func (c *DeferredContext) GetStorage(key []byte) ([]byte, error) {
 		c.tracef("ctx.GetStorage(committed) %x: %x\n", key, data)
 		return data, nil
 	}
+	if c.cachedStorages != nil {
+		if data, ok := c.cachedStorages.Get(string(key)); ok {
+			c.tracef("ctx.GetStorage(cached) %x: %x\n", key, data)
+			return data, nil
+		}
+	}
 
 	var data []byte
 	err := c.dm.WithReader(func(reader DomainsReader) error {
@@ -183,6 +214,10 @@ func (c *DeferredContext) GetStorage(key []byte) ([]byte, error) {
 			return nil
 		}
 	})
+
+	if err == nil && c.cachedStorages != nil {
+		c.cachedStorages.Add(string(key), data)
+	}
 	return data, err
 }
 
@@ -194,6 +229,12 @@ func (c *DeferredContext) GetBranch(prefix []byte) ([]byte, uint64, error) {
 	if br, ok := c.committedBranches[string(prefix)]; ok {
 		c.tracef("ctx.GetBranch(committed) %x: %x\n", prefix, br.data)
 		return br.data, br.prevStep, nil
+	}
+	if c.cachedBranches != nil {
+		if br, ok := c.cachedBranches.Get(string(prefix)); ok {
+			c.tracef("ctx.GetBranch(cached) %x: %x\n", prefix, br.data)
+			return br.data, br.prevStep, nil
+		}
 	}
 
 	var br pendingBranch
@@ -209,6 +250,10 @@ func (c *DeferredContext) GetBranch(prefix []byte) ([]byte, uint64, error) {
 			return nil
 		}
 	})
+
+	if err == nil && c.cachedBranches != nil {
+		c.cachedBranches.Add(string(prefix), br)
+	}
 	return br.data, br.prevStep, err
 }
 
