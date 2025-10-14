@@ -18,35 +18,49 @@ package kaiatrie
 import (
 	"encoding/binary"
 	"strings"
+	"sync"
 
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/tidwall/btree"
 )
 
 type WriteBuffer struct {
+	mu    sync.RWMutex
 	txNum uint64                     // current tx num
 	m     *btree.Map[string, []byte] // (key || txNum) => value
 }
 
-func NewWriteBufferFixedLen() *WriteBuffer {
+func NewWriteBuffer() *WriteBuffer {
 	return &WriteBuffer{
 		m: btree.NewMap[string, []byte](128),
 	}
 }
 
 func (b *WriteBuffer) SetTxNum(txNum uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	b.txNum = txNum
 }
 
 func (b *WriteBuffer) Clear() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	b.m.Clear()
 }
 
 func (b *WriteBuffer) Put(key, value []byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	b.m.Set(b.makeBufferKey(key, b.txNum), value)
 }
 
 func (b *WriteBuffer) GetAsOf(key []byte, txNum uint64) ([]byte, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	var (
 		bottomKey = b.makeBufferKey(key, 0)
 		searchKey = b.makeBufferKey(key, txNum)
@@ -77,7 +91,7 @@ type DomainsWriteBuffer [kv.DomainLen]*WriteBuffer
 func NewDomainsWriteBuffer() DomainsWriteBuffer {
 	buf := DomainsWriteBuffer{}
 	for i := range kv.DomainLen {
-		buf[i] = NewWriteBufferFixedLen()
+		buf[i] = NewWriteBuffer()
 	}
 	return buf
 }

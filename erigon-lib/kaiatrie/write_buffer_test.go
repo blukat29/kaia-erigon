@@ -20,14 +20,20 @@
 package kaiatrie
 
 import (
+	"math/big"
+	"math/rand"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/erigontech/erigon-lib/common"
 	"github.com/erigontech/erigon-lib/kv"
 	"github.com/stretchr/testify/assert"
 )
 
-func Test_WriteBufferFixedLen_EdgeCases(t *testing.T) {
-	wb := NewWriteBufferFixedLen()
+func Test_WriteBuffer_EdgeCases(t *testing.T) {
+	wb := NewWriteBuffer()
 	wb.SetTxNum(1)
 
 	// Normal case
@@ -49,7 +55,7 @@ func Test_WriteBufferFixedLen_EdgeCases(t *testing.T) {
 	assert.Equal(t, []byte("vvv"), v)
 }
 
-func Test_WriteVufferFixedLen_TxNums(t *testing.T) {
+func Test_WriteVuffer_TxNums(t *testing.T) {
 	var (
 		key = []byte("1111")
 
@@ -80,7 +86,7 @@ func Test_WriteVufferFixedLen_TxNums(t *testing.T) {
 		}
 	)
 
-	wb := NewWriteBufferFixedLen()
+	wb := NewWriteBuffer()
 
 	for _, input := range inputs {
 		wb.SetTxNum(input.txNum)
@@ -97,7 +103,7 @@ func Test_WriteVufferFixedLen_TxNums(t *testing.T) {
 
 func Test_DomainsWriteBuffer_ZeroKeys(t *testing.T) {
 	// Zero-byte keys occurs in CommitmentDomain to store Branches. prefix 0x00 and 0x0000 are different.
-	wb := NewWriteBufferFixedLen()
+	wb := NewWriteBuffer()
 
 	k1 := []byte{0}
 	k2 := []byte{0, 0}
@@ -146,4 +152,60 @@ func Test_DomainsWriteBuffer(t *testing.T) {
 	v, ok = dwb.GetAsOf(kv.ReceiptDomain, []byte("1111"), 1)
 	assert.True(t, ok)
 	assert.Equal(t, []byte("w"), v)
+}
+
+// Test that WriteBuffer is thread-safe
+func Test_WriteBuffer_Concurrent(t *testing.T) {
+	var (
+		wb   = NewWriteBuffer()
+		wg   sync.WaitGroup
+		stop atomic.Int32
+		num  atomic.Int64
+	)
+
+	// Write to at most 1000 keys
+	writer := func() {
+		i := int64(0)
+		for stop.Load() == 0 {
+			i = (i + 1) % 1000
+			k := common.BigToAddress(big.NewInt(i)).Bytes()
+			v := common.BigToHash(big.NewInt(num.Load()*1000 + i)).Bytes()
+			wb.Put(k, v)
+		}
+		wg.Done()
+	}
+
+	// Read from a key among 1000 keys
+	reader := func() {
+		i := int64(0)
+		for stop.Load() == 0 {
+			i = (i + 1) % 1000
+			k := common.BigToAddress(big.NewInt(i)).Bytes()
+			n := rand.Intn(int(num.Load()) + 1)
+			wb.GetAsOf(k, uint64(n))
+		}
+		wg.Done()
+	}
+
+	// Occasionally clear the buffer
+	clearer := func() {
+		for stop.Load() == 0 {
+			wb.Clear()
+			time.Sleep(time.Millisecond * 100)
+		}
+		wg.Done()
+	}
+
+	wg.Add(3)
+	go writer()
+	go reader()
+	go clearer()
+
+	for i := 0; i < 50; i++ {
+		num.Store(int64(i))
+		time.Sleep(time.Millisecond * 100)
+	}
+
+	stop.Store(1)
+	wg.Wait()
 }
